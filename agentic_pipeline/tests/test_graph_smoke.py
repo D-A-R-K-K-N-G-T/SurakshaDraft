@@ -115,6 +115,7 @@ def test_graph_smoke(monkeypatch, scenario_a_state):
     scenario_a_state.evidence[1].sha256 = hashlib.sha256(b"2").hexdigest()
 
     import agentic_pipeline.graph as g
+    from agentic_pipeline.schemas import LLMValuationItem, LLMPolicyItem, LLMPendingItem
     
     class MockLLM:
         def __init__(self, schema):
@@ -123,33 +124,27 @@ def test_graph_smoke(monkeypatch, scenario_a_state):
             if self.schema == ValuationOutput:
                 out_items = []
                 for i in scenario_a_state.line_items:
-                    li = LineItem(**i.model_dump())
-                    li.value_source = ValueSource.INVOICE_MATCHED
-                    if li.item_ref == "LI-1":
-                        li.unit_value = 1450
-                        li.purchase_value = 1450 * li.quantity
-                        li.net_loss = 1450 * li.quantity
-                        li.matched_document_ids = ["DOC-INV-1187"]
-                    elif li.item_ref == "LI-4":
-                        li.unit_value = 34000
-                        li.purchase_value = 34000
-                        li.net_loss = 34000
-                        li.matched_document_ids = ["DOC-INV-2201"]
-                    out_items.append(li)
+                    unit_val = None
+                    docs = []
+                    if i.item_ref == "LI-1":
+                        unit_val = 1450
+                        docs = ["DOC-INV-1187"]
+                    elif i.item_ref == "LI-4":
+                        unit_val = 34000
+                        docs = ["DOC-INV-2201"]
+                    out_items.append(LLMValuationItem(item_ref=i.item_ref, unit_value=unit_val, matched_document_ids=docs))
                 return ValuationOutput(items=out_items)
             elif self.schema == PolicyOutput:
                 out_items = []
                 for i in scenario_a_state.line_items:
-                    li = LineItem(**i.model_dump())
-                    li.policy_status = PolicyStatus.COVERED
-                    out_items.append(li)
+                    out_items.append(LLMPolicyItem(item_ref=i.item_ref, policy_status=PolicyStatus.COVERED))
                 return PolicyOutput(items=out_items)
             elif self.schema == ReconciliationOutput:
                 return ReconciliationOutput(pending_items=[
-                    PendingVerificationItem(
+                    LLMPendingItem(
                         item_label="Fabric rolls",
                         quantity_claimed=28,
-                        claimed_total=91000,
+                        unit_value_from_records=3250.0,
                         supporting_documents=["DOC-REG-002"]
                     )
                 ])

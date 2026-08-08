@@ -190,32 +190,31 @@ def valuation_agent_node(state: ClaimState) -> dict:
     ])
     
     valid_doc_ids = {d.document_id for d in state.documents}
-    updated_items = {}
-    for item in result.items:
-        # Validate documents
-        valid_matches = [did for did in item.matched_document_ids if did in valid_doc_ids]
-        if len(valid_matches) < len(item.matched_document_ids):
+    llm_updates = {item.item_ref: item for item in result.items}
+    
+    new_line_items = []
+    for item in state.line_items:
+        if item.item_ref in llm_updates:
+            llm_item = llm_updates[item.item_ref]
+            
+            # Map LLM outputs to the actual LineItem
+            valid_matches = [did for did in llm_item.matched_document_ids if did in valid_doc_ids]
             item.matched_document_ids = valid_matches
-            if not valid_matches:
+            item.unit_value = llm_item.unit_value
+            
+            if valid_matches and item.unit_value is not None:
+                item.value_source = ValueSource.INVOICE_MATCHED
+                dep_pct = item.depreciation_pct or 0.0
+                item.purchase_value = item.quantity * item.unit_value
+                item.net_loss = item.purchase_value * (1.0 - dep_pct)
+            else:
                 item.value_source = ValueSource.UNVALUED
+                item.matched_document_ids = []
                 item.unit_value = None
                 item.purchase_value = None
                 item.net_loss = None
-
-        # Math Enforcement
-        if item.value_source == ValueSource.INVOICE_MATCHED and item.unit_value is not None:
-            dep_pct = item.depreciation_pct or 0.0
-            item.purchase_value = item.quantity * item.unit_value
-            item.net_loss = item.purchase_value * (1.0 - dep_pct)
-
-        updated_items[item.item_ref] = item
         
-    new_line_items = []
-    for item in state.line_items:
-        if item.item_ref in updated_items:
-            new_line_items.append(updated_items[item.item_ref])
-        else:
-            new_line_items.append(item)
+        new_line_items.append(item)
             
     unpriced_items_after = [i for i in new_line_items if i.value_source == ValueSource.UNVALUED]
     retries = state.valuation_retries
@@ -262,19 +261,22 @@ def policy_agent_node(state: ClaimState) -> dict:
     ])
     
     policy_clauses = state.policy.get("clauses", "")
-    updated_items = {}
-    for item in result.items:
-        if item.policy_clause and item.policy_clause not in policy_clauses:
-            item.policy_status = PolicyStatus.REVIEW
-            item.policy_reasoning = f"Hallucinated clause cited: {item.policy_clause}. Original reasoning: {item.policy_reasoning}"
-        updated_items[item.item_ref] = item
-        
+    llm_updates = {item.item_ref: item for item in result.items}
+    
     new_line_items = []
     for item in state.line_items:
-        if item.item_ref in updated_items:
-            new_line_items.append(updated_items[item.item_ref])
-        else:
-            new_line_items.append(item)
+        if item.item_ref in llm_updates:
+            llm_item = llm_updates[item.item_ref]
+            
+            item.policy_status = llm_item.policy_status
+            item.policy_clause = llm_item.policy_clause
+            item.policy_reasoning = llm_item.policy_reasoning
+            
+            if item.policy_clause and item.policy_clause not in policy_clauses:
+                item.policy_status = PolicyStatus.REVIEW
+                item.policy_reasoning = f"Hallucinated clause cited: {item.policy_clause}. Original reasoning: {item.policy_reasoning}"
+                
+        new_line_items.append(item)
             
     return {"line_items": new_line_items}
 
@@ -298,12 +300,25 @@ def reconciliation_agent_node(state: ClaimState) -> dict:
     ])
     
     valid_doc_ids = {d.document_id for d in state.documents}
-    for pending in result.pending_items:
-        pending.supporting_documents = [did for did in pending.supporting_documents if did in valid_doc_ids]
-        if pending.quantity_claimed is not None and pending.unit_value_from_records is not None:
-            pending.claimed_total = pending.quantity_claimed * pending.unit_value_from_records
+    final_pending_items = []
+    
+    for llm_item in result.pending_items:
+        valid_docs = [did for did in llm_item.supporting_documents if did in valid_doc_ids]
+        
+        claimed_total = None
+        if llm_item.quantity_claimed is not None and llm_item.unit_value_from_records is not None:
+            claimed_total = llm_item.quantity_claimed * llm_item.unit_value_from_records
             
-    return {"pending_verification": result.pending_items}
+        final_pending_items.append(PendingVerificationItem(
+            item_label=llm_item.item_label,
+            quantity_claimed=llm_item.quantity_claimed,
+            unit_value_from_records=llm_item.unit_value_from_records,
+            claimed_total=claimed_total,
+            user_notes=llm_item.user_notes,
+            supporting_documents=valid_docs
+        ))
+            
+    return {"pending_verification": final_pending_items}
 
 
 # --- Plausibility Helpers ---

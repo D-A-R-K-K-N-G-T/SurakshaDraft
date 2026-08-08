@@ -63,10 +63,8 @@ Your job is to assign a monetary value to unpriced LineItems using provided purc
 
 <prerequisites>
 - You are provided with a list of LineItems and a list of available Documents.
-- `value_source`: Must be `invoice_matched` if a price is found, or `unvalued` if no match exists.
-- `net_loss` = `quantity` * `unit_value` * (1 - `depreciation_pct`). Assume 0% depreciation unless item 
-  appears significantly old based on invoice date or description.
 - You must NOT guess or estimate a value if no supporting document is found.
+- You only need to extract the unit value. The system will handle math and depreciation separately.
 </prerequisites>
 
 <procedure>
@@ -75,22 +73,20 @@ Your job is to assign a monetary value to unpriced LineItems using provided purc
 3. Attempt to match each LineItem to a Document based on similar names, categories, or quantities. Partial matches (e.g., "Sarees" matching "Silk Sarees") are acceptable if reasonably inferable.
 4. If a match is found:
    - Extract the unit value from the invoice.
-   - Calculate `purchase_value` and `net_loss`.
-   - Update the LineItem with these values.
-   - Set `value_source` to `invoice_matched` and append the Document ID to `matched_document_ids`.
-5. If no match is found for a LineItem, leave its unit value empty and set `value_source` to `unvalued`.
+   - Set the `unit_value` and append the Document ID to `matched_document_ids`.
+5. If no match is found for a LineItem, leave its unit value empty and document list empty.
 </procedure>
 
 <few_shots>
 <example>
 LineItem: "Cotton Saree" (qty: 10, value: None). Document: "Invoice for 50 Cotton Sarees at Rs 1000 each" (DOC-1).
 Reasoning: Clear match. Unit value is 1000.
-Output: Update LineItem -> unit_value=1000, purchase_value=10000, net_loss=10000, value_source="invoice_matched", matched_document_ids=["DOC-1"].
+Output: Return LLMValuationItem -> unit_value=1000, matched_document_ids=["DOC-1"].
 </example>
 <example>
 LineItem: "Wooden Desk" (qty: 1, value: None). Document: None relevant.
 Reasoning: No matching document. Cannot guess value.
-Output: Update LineItem -> unit_value=None, value_source="unvalued".
+Output: Return LLMValuationItem -> unit_value=None.
 </example>
 </few_shots>
 
@@ -173,8 +169,8 @@ Your job is to cross-reference missing items (indicated by physical signals) wit
 2. Review the provided `Documents` for records of inventory that should have been present.
 3. Attempt to correlate a missing signal with a specific documented inventory record.
 4. If a document substantiates the existence and quantity of an item that aligns with a missing signal, create a 
-  `PendingVerificationItem` containing the claimed quantity, calculated value, and attach the supporting Document IDs.
-5. If a signal exists but no document supports it, create a `PendingVerificationItem` with unknown quantity/value and 
+  `LLMPendingItem` containing the claimed quantity, the unit value extracted from the records, and attach the supporting Document IDs.
+5. If a signal exists but no document supports it, create a `LLMPendingItem` with unknown quantity/value and 
   no attached documents, noting the lack of proof.
 </procedure>
 
@@ -182,12 +178,12 @@ Your job is to cross-reference missing items (indicated by physical signals) wit
 <example>
 Missing Signal: "Empty rack". Document: "Stock register shows 28 fabric rolls" (DOC-REG-001).
 Reasoning: The empty rack correlates with the documented 28 fabric rolls.
-Output: Create PendingVerificationItem for "Fabric rolls", qty 28, supporting_documents=["DOC-REG-001"].
+Output: Create LLMPendingItem for "Fabric rolls", qty 28, supporting_documents=["DOC-REG-001"].
 </example>
 <example>
 Missing Signal: "Empty display counter". Document: None relevant.
 Reasoning: Signal exists, but no documentation proves what was there or how much.
-Output: Create PendingVerificationItem for "Unknown display items", qty 0, supporting_documents=[].
+Output: Create LLMPendingItem for "Unknown display items", qty 0, supporting_documents=[].
 </example>
 </few_shots>
 

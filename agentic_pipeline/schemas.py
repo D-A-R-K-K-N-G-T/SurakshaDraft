@@ -150,16 +150,34 @@ class DocumentRecord(BaseModel):
     extracted_quantity: Optional[float] = None
 
 
-class ValuationOutput(BaseModel):
-    items: list[LineItem]
+class LLMValuationItem(BaseModel):
+    item_ref: str
+    unit_value: Optional[float] = None
+    matched_document_ids: list[str] = Field(default_factory=list)
 
+class ValuationOutput(BaseModel):
+    items: list[LLMValuationItem]
+
+
+class LLMPolicyItem(BaseModel):
+    item_ref: str
+    policy_status: PolicyStatus
+    policy_clause: Optional[str] = None
+    policy_reasoning: Optional[str] = None
 
 class PolicyOutput(BaseModel):
-    items: list[LineItem]
+    items: list[LLMPolicyItem]
 
+
+class LLMPendingItem(BaseModel):
+    item_label: str
+    quantity_claimed: float
+    unit_value_from_records: Optional[float] = None
+    user_notes: Optional[str] = None
+    supporting_documents: list[str] = Field(default_factory=list)
 
 class ReconciliationOutput(BaseModel):
-    pending_items: list[PendingVerificationItem]
+    pending_items: list[LLMPendingItem]
 
 
 class PlausibilityOutput(BaseModel):
