@@ -21,21 +21,19 @@ describe the damage, returning structured outputs.
 </prerequisites>
 
 <procedure>
-1. Analyze the provided policyholder's declared asset categories to establish context.
-2. Examine each provided photo (preceded by evidence_id and capture stage) carefully.
-3. Identify every distinct claimable item or item-group. Do NOT create separate entries for identical items 
-  grouped together (e.g., use quantity).
-4. If a photo clearly shows a damaged item, add it to `items` and cite the `evidence_refs`.
-5. If a photo shows an empty space or debris indicating something is missing, add a description of the signal 
+1. Examine each provided photo (preceded by evidence_id and capture stage) carefully.
+2. Identify every distinct item or item-group that is physically damaged. Do NOT create separate entries for identical items grouped together.
+3. If a photo clearly shows a damaged item, add it to `items` and cite the `evidence_refs`. DO NOT filter items based on whether you think they are covered by the policy; extract ALL damaged items.
+4. If a photo shows an empty space or debris indicating something is missing, add a description of the signal 
   to `missing_signals`. NEVER invent an item with no visual basis.
-6. If any photo has issues preventing clear identification, note it in `anomalies`.
+5. If any photo has issues preventing clear identification, note it in `anomalies`.
 </procedure>
 
 <few_shots>
 <example>
-Input: Photo showing 180 water-stained cotton sarees stacked together (Evidence: IMG-001).
+Input: Photo showing water-stained cotton sarees stacked together (Evidence: IMG-001).
 Reasoning: Distinct item group identified visibly damaged.
-Output: Add to `items`: "Cotton sarees, assorted", quantity 180, evidence_refs ["IMG-001"].
+Output: Add to `items`: "Cotton sarees, assorted", evidence_refs ["IMG-001"].
 </example>
 <example>
 Input: Photo showing a completely empty display counter covered in mud (Evidence: IMG-002).
@@ -50,8 +48,6 @@ Return the structured VisionOutput containing `items`, `missing_signals`, and `a
 """
 
 VISION_HUMAN_PROMPT_TEMPLATE = """
-Declared asset categories for this policy: {asset_categories}
-
 Photos follow below, each preceded by its evidence_id and capture stage.
 """
 
@@ -219,9 +215,8 @@ addressing any prior quality control flags.
 1. Review the provided QC Flags (if any). If `qc_flags` is non-empty, treat this as a correction pass. 
   Address each flag specifically. Do NOT regenerate the whole document from scratch — start from the previous 
   `draft_pack` and make targeted changes.
-2. Construct the `main_schedule` by formatting all valid LineItems (covered or review). Include item names, 
-  quantities, and net loss. If a LineItem has `quantity_capped=True`, include its `plausibility_notes` in the 
-  main_schedule narrative next to that item, phrased plainly (e.g. "Note: claimed quantity adjusted to match invoice records").
+2. Construct the `main_schedule` by formatting all valid LineItems (covered or review). Include item names and net loss (if `net_loss` is 0.0 or missing, display it as "Unknown"). If a LineItem has `quantity_capped=True`, include its `plausibility_notes` in the 
+  main_schedule narrative next to that item, phrased plainly.
 3. Construct the `rejected_items_annexure` by formatting all RejectedItems. You MUST include the specific reasons for rejection 
   and the associated evidence references.
 4. Construct the `pending_verification_annexure` by formatting all PendingVerificationItems, including claimed totals and 

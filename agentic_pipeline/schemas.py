@@ -102,7 +102,6 @@ class VisionCandidateItem(BaseModel):
     name: str
     description: str = ""
     category: str = ""
-    quantity: float = 1
     vision_confidence: float = Field(ge=0, le=1)
     evidence_refs: list[str] = Field(default_factory=list)
 

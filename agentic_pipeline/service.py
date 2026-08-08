@@ -1,3 +1,7 @@
+import os
+from dotenv import load_dotenv
+load_dotenv(".env")
+
 import uuid
 from typing import List
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -12,6 +16,10 @@ from agentic_pipeline.prompts import VISION_SYSTEM_PROMPT, VISION_HUMAN_PROMPT_T
 from agentic_pipeline.images import build_image_block
 
 app = FastAPI(title="SurakshaDraft Agent API")
+
+@app.get("/")
+def read_root():
+    return {"status": "online", "service": "SurakshaDraft LangGraph Pipeline API"}
 
 class VisionPreviewRequest(BaseModel):
     image_base64: str
@@ -96,7 +104,7 @@ def get_claim(claim_id: str):
 
 def main():
     import uvicorn
-    uvicorn.run("service:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("agentic_pipeline.service:app", host="0.0.0.0", port=8000, reload=True)
 
 if __name__ == "__main__":
     main()

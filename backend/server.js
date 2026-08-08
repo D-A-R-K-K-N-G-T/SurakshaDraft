@@ -131,6 +131,10 @@ app.get('/api/claim/:claim_id', async (req, res) => {
     }
 });
 
+app.get('/', (req, res) => {
+    res.send({ status: "online", service: "SurakshaDraft API Gateway", message: "Use the /api endpoints to submit claims." });
+});
+
 app.listen(port, () => {
   console.log(`Express Backend running on http://localhost:${port}`);
 });

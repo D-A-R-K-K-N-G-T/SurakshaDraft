@@ -6,6 +6,20 @@ key to be set or a provider's SDK to be importable, only *running* the pipeline 
 """
 from __future__ import annotations
 
+import warnings
+import logging
+
+warnings.filterwarnings("ignore", message=".*\\$defs.*")
+
+class SuppressDefsWarning(logging.Filter):
+    def filter(self, record):
+        return "'$defs' is not supported" not in record.getMessage()
+
+logging.getLogger("langchain_core.utils.json_schema").addFilter(SuppressDefsWarning())
+logging.getLogger("langchain_google_genai.chat_models").addFilter(SuppressDefsWarning())
+# Catch-all for the root logger just in case
+logging.getLogger().addFilter(SuppressDefsWarning())
+
 from dataclasses import dataclass
 from typing import Any, Optional
 

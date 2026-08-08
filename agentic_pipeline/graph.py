@@ -116,7 +116,7 @@ def evidence_verify_node(state: ClaimState) -> dict:
         e.verified = verified
         e.verification_reasons.extend(reasons)
         
-    return {}
+    return {"evidence": state.evidence}
 
 
 def vision_node(state: ClaimState) -> dict:
@@ -158,7 +158,6 @@ def vision_node(state: ClaimState) -> dict:
             name=item.name,
             description=item.description,
             category=item.category,
-            quantity=item.quantity,
             evidence_refs=item.evidence_refs,
             vision_confidence=item.vision_confidence,
         )

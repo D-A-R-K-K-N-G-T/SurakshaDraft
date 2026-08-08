@@ -30,7 +30,7 @@ class ClaimState(BaseModel):
     event: dict
 
     documents: Annotated[list[DocumentRecord], operator.add] = []
-    evidence: Annotated[list[EvidenceRecord], operator.add] = []
+    evidence: list[EvidenceRecord] = []
     line_items: list[LineItem] = []
     rejected_items: Annotated[list[RejectedItem], operator.add] = []
     pending_verification: Annotated[list[PendingVerificationItem], operator.add] = []

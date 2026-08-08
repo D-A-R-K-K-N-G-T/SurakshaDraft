@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # --- Gemini (langchain-google-genai) — notebook testing ---
     google_api_key: str = ""
-    gemini_default_model: str = "gemini-pro"
+    gemini_default_model: str = "gemini-3.1-flash-lite"
     gemini_vision_model: str | None = None  # falls back to gemini_default_model if unset
 
     # --- watsonx (langchain-ibm) — production ---
