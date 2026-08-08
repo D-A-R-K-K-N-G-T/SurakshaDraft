@@ -4,13 +4,13 @@ import json
 import os
 import hashlib
 
-from graph import graph
-from schemas import (
+from agentic_pipeline.graph import graph
+from agentic_pipeline.schemas import (
     CaptureStage, DocumentRecord, EvidenceRecord, LineItem, 
     VisionMissingSignal, ValuationOutput, PolicyOutput, 
     ReconciliationOutput, DraftOutput, QCGuardOutput, ValueSource, PolicyStatus, PendingVerificationItem
 )
-from state import ClaimState
+from agentic_pipeline.state import ClaimState
 
 @pytest.fixture
 def scenario_a_state():
@@ -114,7 +114,7 @@ def test_graph_smoke(monkeypatch, scenario_a_state):
     scenario_a_state.evidence[0].sha256 = hashlib.sha256(b"1").hexdigest()
     scenario_a_state.evidence[1].sha256 = hashlib.sha256(b"2").hexdigest()
 
-    import graph as g
+    import agentic_pipeline.graph as g
     
     class MockLLM:
         def __init__(self, schema):

@@ -4,12 +4,12 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from schemas import VisionCandidateItem, VisionOutput
-from state import ClaimState
-from graph import graph
-from llm import get_structured_llm, invoke_structured
-from prompts import VISION_SYSTEM_PROMPT, VISION_HUMAN_PROMPT_TEMPLATE
-from images import build_image_block
+from agentic_pipeline.schemas import VisionCandidateItem, VisionOutput
+from agentic_pipeline.state import ClaimState
+from agentic_pipeline.graph import graph
+from agentic_pipeline.llm import get_structured_llm, invoke_structured
+from agentic_pipeline.prompts import VISION_SYSTEM_PROMPT, VISION_HUMAN_PROMPT_TEMPLATE
+from agentic_pipeline.images import build_image_block
 
 app = FastAPI(title="SurakshaDraft Agent API")
 

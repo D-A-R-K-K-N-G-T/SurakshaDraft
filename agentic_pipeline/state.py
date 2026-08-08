@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 
 from pydantic import BaseModel
 
-from schemas import (
+from agentic_pipeline.schemas import (
     EvidenceRecord,
     LineItem,
     PendingVerificationItem,

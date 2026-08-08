@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
-from config import settings
+from agentic_pipeline.config import settings
 
 
 @dataclass
