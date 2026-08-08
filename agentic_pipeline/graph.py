@@ -9,6 +9,7 @@ import json
 import hashlib
 import os
 import math
+import re
 from datetime import datetime, timezone
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
@@ -188,7 +189,27 @@ def valuation_agent_node(state: ClaimState) -> dict:
         HumanMessage(content=human_msg)
     ])
     
-    updated_items = {item.item_ref: item for item in result.items}
+    valid_doc_ids = {d.document_id for d in state.documents}
+    updated_items = {}
+    for item in result.items:
+        # Validate documents
+        valid_matches = [did for did in item.matched_document_ids if did in valid_doc_ids]
+        if len(valid_matches) < len(item.matched_document_ids):
+            item.matched_document_ids = valid_matches
+            if not valid_matches:
+                item.value_source = ValueSource.UNVALUED
+                item.unit_value = None
+                item.purchase_value = None
+                item.net_loss = None
+
+        # Math Enforcement
+        if item.value_source == ValueSource.INVOICE_MATCHED and item.unit_value is not None:
+            dep_pct = item.depreciation_pct or 0.0
+            item.purchase_value = item.quantity * item.unit_value
+            item.net_loss = item.purchase_value * (1.0 - dep_pct)
+
+        updated_items[item.item_ref] = item
+        
     new_line_items = []
     for item in state.line_items:
         if item.item_ref in updated_items:
@@ -240,7 +261,14 @@ def policy_agent_node(state: ClaimState) -> dict:
         HumanMessage(content=human_msg)
     ])
     
-    updated_items = {item.item_ref: item for item in result.items}
+    policy_clauses = state.policy.get("clauses", "")
+    updated_items = {}
+    for item in result.items:
+        if item.policy_clause and item.policy_clause not in policy_clauses:
+            item.policy_status = PolicyStatus.REVIEW
+            item.policy_reasoning = f"Hallucinated clause cited: {item.policy_clause}. Original reasoning: {item.policy_reasoning}"
+        updated_items[item.item_ref] = item
+        
     new_line_items = []
     for item in state.line_items:
         if item.item_ref in updated_items:
@@ -269,6 +297,12 @@ def reconciliation_agent_node(state: ClaimState) -> dict:
         HumanMessage(content=human_msg)
     ])
     
+    valid_doc_ids = {d.document_id for d in state.documents}
+    for pending in result.pending_items:
+        pending.supporting_documents = [did for did in pending.supporting_documents if did in valid_doc_ids]
+        if pending.quantity_claimed is not None and pending.unit_value_from_records is not None:
+            pending.claimed_total = pending.quantity_claimed * pending.unit_value_from_records
+            
     return {"pending_verification": result.pending_items}
 
 
@@ -446,6 +480,18 @@ def drafter_node(state: ClaimState) -> dict:
 
 
 def qc_guardian_node(state: ClaimState) -> dict:
+    if state.draft_pack:
+        # Pre-LLM deterministic checks
+        valid_items_count = len([i for i in state.line_items if i.policy_status in (PolicyStatus.COVERED, PolicyStatus.REVIEW)])
+        schedule_refs = len(set(re.findall(r"LI-\d+", state.draft_pack.main_schedule)))
+        if schedule_refs != valid_items_count:
+            return {"qc": QCGuardOutput(pass_qc=False, flags=[f"Deterministic check failed: main_schedule contains {schedule_refs} items but state has {valid_items_count} valid items."])}
+            
+        rej_count = len(state.rejected_items)
+        rej_refs = len(set(re.findall(r"LI-\d+", state.draft_pack.rejected_items_annexure)))
+        if rej_refs != rej_count:
+            return {"qc": QCGuardOutput(pass_qc=False, flags=[f"Deterministic check failed: rejected_items_annexure contains {rej_refs} items but state has {rej_count} rejected items."])}
+
     llm = get_structured_llm(QCGuardOutput)
     
     human_msg = QC_GUARDIAN_HUMAN_PROMPT_TEMPLATE.format(
