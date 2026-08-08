@@ -34,6 +34,8 @@ class ClaimState(BaseModel):
     line_items: list[LineItem] = []
     rejected_items: Annotated[list[RejectedItem], operator.add] = []
     pending_verification: Annotated[list[PendingVerificationItem], operator.add] = []
+    warnings: Annotated[list[str], operator.add] = []
+    intake_ok: bool = False
 
     # free-text notes from any node that spots something off but isn't
     # itself the check that should act on it (added by vision so far)

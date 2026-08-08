@@ -11,11 +11,29 @@ import mimetypes
 from pathlib import Path
 
 
+def resolve_file_ref(ref: str) -> bytes:
+    if ref.startswith("s3://"):
+        # TODO: Implement S3 fetch
+        raise NotImplementedError("S3 fetch not implemented")
+    elif ref.startswith("https://") or ref.startswith("http://"):
+        # TODO: Implement HTTPS fetch
+        raise NotImplementedError("HTTPS fetch not implemented")
+    else:
+        # Default to local file path
+        # Strip file:// prefix if present
+        local_path = ref.replace("file://", "", 1)
+        path = Path(local_path)
+        return path.read_bytes()
+
+
 def load_image_as_data_url(file_ref: str) -> str:
-    path = Path(file_ref)
+    local_path = file_ref.replace("file://", "", 1) if file_ref.startswith("file://") else file_ref
+    path = Path(local_path)
     mime_type, _ = mimetypes.guess_type(path.name)
     mime_type = mime_type or "image/jpeg"
-    b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
+    
+    b_data = resolve_file_ref(file_ref)
+    b64 = base64.b64encode(b_data).decode("utf-8")
     return f"data:{mime_type};base64,{b64}"
 
 

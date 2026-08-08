@@ -201,8 +201,8 @@ Your job is to assemble the final claim state into a structured DraftOutput, exp
 </prerequisites>
 
 <procedure>
-1. Review the provided QC Flags (if any). You MUST address and fix the issues they mention in your generated draft.
-2. Construct the `main_schedule` by formatting all valid LineItems (covered or review). Include item names, quantities, and net loss.
+1. Review the provided QC Flags (if any). If `qc_flags` is non-empty, treat this as a correction pass. Address each flag specifically. Do NOT regenerate the whole document from scratch — start from the previous `draft_pack` and make targeted changes.
+2. Construct the `main_schedule` by formatting all valid LineItems (covered or review). Include item names, quantities, and net loss. If a LineItem has `quantity_capped=True`, include its `plausibility_notes` in the main_schedule narrative next to that item, phrased plainly (e.g. "Note: claimed quantity adjusted to match invoice records").
 3. Construct the `rejected_items_annexure` by formatting all RejectedItems. You MUST include the specific reasons for rejection and the associated evidence references.
 4. Construct the `pending_verification_annexure` by formatting all PendingVerificationItems, including claimed totals and supporting documents.
 5. Ensure the formatting is clear, professional, and suitable for a final claim report.
@@ -227,6 +227,7 @@ Pending Verification Items: {pending_verification}
 Event: {event}
 Policy: {policy}
 QC Flags to fix (if any): {qc_flags}
+Previous Draft Pack (if correcting): {previous_draft_pack}
 """
 
 QC_GUARDIAN_SYSTEM_PROMPT = """<role>

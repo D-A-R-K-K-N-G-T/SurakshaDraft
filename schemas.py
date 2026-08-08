@@ -61,6 +61,7 @@ class LineItem(BaseModel):
     quantity: float = 1
     evidence_refs: list[str] = Field(default_factory=list)
     vision_confidence: Optional[float] = None  # 0-1, set by `vision`
+    serial_number: Optional[str] = None
 
     # set by valuation_agent
     unit_value: Optional[float] = None
@@ -68,8 +69,12 @@ class LineItem(BaseModel):
     depreciation_pct: Optional[float] = None
     net_loss: Optional[float] = None
     value_source: ValueSource = ValueSource.UNVALUED
-    matched_invoice_ref: Optional[str] = None
     matched_document_ids: list[str] = Field(default_factory=list)
+    
+    # set by plausibility
+    original_quantity_claimed: Optional[float] = None
+    quantity_capped: bool = False
+    plausibility_notes: list[str] = Field(default_factory=list)
 
     # set by policy_agent
     policy_status: Optional[PolicyStatus] = None
@@ -134,6 +139,7 @@ class PendingVerificationItem(BaseModel):
     unit_value_from_records: Optional[float] = None
     claimed_total: Optional[float] = None
     user_notes: Optional[str] = None
+    supporting_documents: list[str] = Field(default_factory=list)
 
 
 class DocumentRecord(BaseModel):
@@ -141,6 +147,7 @@ class DocumentRecord(BaseModel):
     document_type: str
     file_ref: str
     uploaded_at: datetime
+    extracted_quantity: Optional[float] = None
 
 
 class ValuationOutput(BaseModel):
