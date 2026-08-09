@@ -548,11 +548,6 @@ def write_audit(session, *, action: str, entity_type: str, entity_id: str,
     ))
 
 
-        succeeded=succeeded, error_type=error_type, prompt_tokens=prompt_tokens,
-        output_tokens=output_tokens, input_summary=input_summary, output_raw=output_raw,
-    ))
-
-
 # --------------------------------------------------------------------------
 # identity & policies (Phase 7)
 # --------------------------------------------------------------------------

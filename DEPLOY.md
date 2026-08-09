@@ -321,11 +321,24 @@ Read the comments in the file; the four that must be right:
   and `S3_SECRET_KEY` **empty** so the instance role is used.
 - `PII_MASTER_KEY` — **back this up off the instance before going live.** Lose
   it and every stored blob is permanently undecryptable.
-- `AUTH_MODE`. Leaving it `firebase` requires a service-account JSON at
-  `~/suraksha/secrets/firebase.json` (compose mounts `./secrets` read-only at
-  `/app/secrets`). If you are not wiring Firebase yet, set `AUTH_MODE=disabled`;
-  claims then run anonymously. Never use `demo` on a public box — there the
-  bearer token *is* the user id, so anyone can impersonate anyone.
+- `AUTH_MODE`. Read the comment block in the file before choosing — the modes
+  are not interchangeable, because the app sends the Firebase **uid** rather
+  than a signed ID token. `firebase` therefore *rejects every token and fails
+  open*, which looks secure but behaves exactly like `disabled`: claims land
+  anonymous and `GET /api/claims` returns `[]`. Ship `disabled` unless you have
+  changed `subjectToken()` in `mobile_app/lib/services/identity.dart` to return
+  `await user.getIdToken()` and dropped a service-account JSON at
+  `~/suraksha/secrets/firebase.json`. `demo` makes claim history work against
+  the app as it stands, at the cost of the bearer token *being* the user id —
+  a short private demo only, never with real claimant data.
+
+- `LLM_PROVIDER` and its keys. `gemini` needs `GOOGLE_API_KEY`; `watsonx` needs
+  `WATSONX_API_KEY` **and** `WATSONX_APIKEY` (same value, two different readers)
+  plus `WATSONX_PROJECT_ID`. An empty key is not a fallback — every LLM call
+  simply fails.
+
+- `RULESET_SOURCE`. Leave it `file` unless you seed the DB catalogue; see the
+  comment in the file for the two `rulesets_cli` commands that `db` requires.
 
 ---
 
