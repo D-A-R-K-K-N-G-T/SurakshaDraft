@@ -46,6 +46,29 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
 
+      # android/app/build.gradle.kts wires buildTypes.release to a "release"
+      # signingConfig whose storeFile defaults to a keystore.jks that is not in
+      # the repo (correctly — signing keys do not belong in git). Without this
+      # step Gradle fails with "Keystore file not found for signing config".
+      #
+      # This key is generated fresh per run and thrown away, which is fine for a
+      # demo build but means each APK is signed by a DIFFERENT key: Android will
+      # refuse to install one over another, so uninstall the old app first. For
+      # anything real, generate a keystore once and store it in repo secrets.
+      - name: Generate a throwaway signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/demo.jks" \
+            -storetype PKCS12 \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -alias demo \
+            -dname "CN=SurakshaDraft Demo, OU=Demo, O=Demo, L=NA, ST=NA, C=IN" \
+            -storepass demo1234 -keypass demo1234
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/demo.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=demo1234" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=demo" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=demo1234" >> "$GITHUB_ENV"
+
       - name: Build release APK
         working-directory: mobile_app
         run: flutter build apk --release --dart-define=API_BASE=${{ inputs.api_base }}
