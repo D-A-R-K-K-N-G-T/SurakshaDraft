@@ -781,14 +781,16 @@ def drain_outbox(session) -> int:
     if not hasattr(M, "OutboxMessage"):
         return 0
     
+    # 'pending' is the only undelivered state the CHECK constraint allows; the
+    # outbox_due partial index is defined over exactly this predicate.
     messages = session.execute(
-        select(M.OutboxMessage).where(M.OutboxMessage.processed_at.is_(None)).limit(100)
+        select(M.OutboxMessage).where(M.OutboxMessage.status == "pending").limit(100)
     ).scalars().all()
-    
-    now = _dt.datetime.now(_dt.timezone.utc)
+
     for msg in messages:
-        msg.processed_at = now
-    
+        msg.status = "sent"
+        msg.attempts = (msg.attempts or 0) + 1
+
     session.flush()
     return len(messages)
 
