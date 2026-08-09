@@ -1,0 +1,44 @@
+# Python image shared by three roles — the FastAPI service, the Celery worker,
+# and one-shot jobs (alembic, scripts/). They differ only by command, so one
+# image keeps the build cache warm and the disk footprint small; that matters on
+# a free-tier t3.micro where the whole EBS volume is 30 GB.
+#
+# Python 3.11 matches .github/workflows/ci.yml, so what CI tests is what ships.
+FROM python:3.11-slim
+
+# psycopg[binary] bundles its own libpq and pillow ships manylinux wheels, so no
+# compiler is needed. curl is only here for the compose healthcheck.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Requirements first, on their own layer. Installing the langchain/langgraph
+# stack is by far the slowest step of the build and it must not be re-run every
+# time application code changes — on a 1 GiB instance it is several minutes.
+COPY agentic_pipeline/requirements.txt agentic_pipeline/requirements.txt
+RUN pip install --upgrade pip && pip install -r agentic_pipeline/requirements.txt
+
+# alembic.ini lives at the repo root and points at agentic_pipeline/migrations,
+# so /app must be the working directory for `alembic upgrade head` to resolve.
+COPY alembic.ini alembic.ini
+COPY agentic_pipeline/ agentic_pipeline/
+COPY scripts/ scripts/
+
+# Run unprivileged. Nothing in this image writes to /app; the only writable path
+# the code needs is /tmp (blobs.local_path_from_ref stages S3 downloads there).
+RUN useradd --create-home --uid 10001 suraksha && chown -R suraksha:suraksha /app
+USER suraksha
+
+EXPOSE 8000
+
+# Single uvicorn worker on purpose: two would double the resident langchain
+# import cost and this box does not have the RAM. Concurrency comes from async
+# request handling plus the Celery worker, not from process count.
+CMD ["uvicorn", "agentic_pipeline.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

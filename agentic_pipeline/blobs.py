@@ -71,12 +71,18 @@ def fs_uri(path: str | os.PathLike) -> str:
     return f"fs://{abs_posix}"
 
 def get_s3_client():
-    return boto3.client(
-        's3',
-        endpoint_url=settings.s3_endpoint_url,
-        aws_access_key_id=settings.s3_access_key,
-        aws_secret_access_key=settings.s3_secret_key
-    )
+    # Both overrides are opt-in so the same code serves MinIO and real S3.
+    # Dev sets s3_endpoint_url/keys explicitly (the config defaults point at the
+    # compose MinIO). On EC2 the deployment leaves them EMPTY: boto3 then
+    # resolves the regional S3 endpoint and picks up the instance role from the
+    # ambient credential chain, so no long-lived keys sit in .env.
+    kwargs = {}
+    if settings.s3_endpoint_url:
+        kwargs["endpoint_url"] = settings.s3_endpoint_url
+    if settings.s3_access_key and settings.s3_secret_key:
+        kwargs["aws_access_key_id"] = settings.s3_access_key
+        kwargs["aws_secret_access_key"] = settings.s3_secret_key
+    return boto3.client("s3", **kwargs)
 
 
 def local_path_from_ref(ref: str) -> str:

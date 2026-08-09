@@ -1,0 +1,179 @@
+# Production stack for a single EC2 instance.
+#
+# The defaults below are sized for the smallest plausible host (t3.micro, 1 GiB)
+# and depend on three choices made deliberately — read them before "simplifying":
+#
+#   * mem_limit on every service. Without ceilings, one runaway container gets
+#     the host OOM-killer to shoot a different one, usually Postgres.
+#   * Celery beat runs EMBEDDED in the worker (-B) instead of as a 7th
+#     container. That saves a full ~150 MB langchain import. It is only safe
+#     because there is exactly one worker; a second worker with -B would run
+#     every periodic task twice.
+#   * uvicorn and Celery both run single-process. See Dockerfile.pipeline.
+#
+# On a 1 GiB host the swap from scripts/ec2_bootstrap.sh is mandatory: it
+# absorbs the build peak and the occasional LLM-response spike, and without it
+# this stack will not come up.
+#
+# On a larger host, raise the ceilings via .env.prod (MEM_API, MEM_WORKER, ...)
+# rather than editing this file — the defaults are floors, not targets, and
+# MEM_API=420m sits uncomfortably close to what the api container actually uses.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+
+name: suraksha
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-suraksha}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-suraksha}
+      # timestamptz correctness (R10): keep the server in UTC, as in dev.
+      TZ: UTC
+      PGTZ: UTC
+    # Defaults are tuned for a machine far larger than this one. 128 MB of
+    # shared_buffers is the conventional 1/8-of-RAM starting point; the
+    # connection cap covers api (5+10) + worker (5+10) with room to spare.
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c max_connections=50
+      -c effective_cache_size=256MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=32MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-suraksha} -d ${POSTGRES_DB:-suraksha}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: ${MEM_DB:-256m}
+    # No ports: mapping. Postgres is reachable only inside this network —
+    # publishing 5432 on a public EC2 IP is how these boxes get owned.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # noeviction is not a tuning preference: Redis is the Celery broker, and
+    # under allkeys-lru a memory spike would silently delete queued claim jobs.
+    # Keeping RDB snapshots means an instance reboot does not drop the queue.
+    command: >
+      redis-server
+      --maxmemory 64mb
+      --maxmemory-policy noeviction
+      --save 60 1
+      --appendonly no
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: ${MEM_REDIS:-96m}
+
+  # One-shot schema migration. Everything that touches the DB waits for this to
+  # exit 0, so a bad migration stops the deploy instead of starting an app
+  # against a half-built schema.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: suraksha/pipeline:latest
+    env_file: [.env.prod]
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    mem_limit: ${MEM_MIGRATE:-320m}
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: suraksha/pipeline:latest
+    restart: unless-stopped
+    env_file: [.env.prod]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      # auth_mode=firebase (the config default) needs a service-account JSON
+      # that GOOGLE_APPLICATION_CREDENTIALS points into. Mounted unconditionally
+      # so the directory may simply be empty when auth_mode is disabled/demo.
+      - ./secrets:/app/secrets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The langchain import graph takes ~20-40s to load on a burstable vCPU;
+      # without this grace period the container is marked unhealthy at boot.
+      start_period: 90s
+    mem_limit: ${MEM_API:-420m}
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: suraksha/pipeline:latest
+    restart: unless-stopped
+    env_file: [.env.prod]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./secrets:/app/secrets:ro
+    # -B embeds beat (see header). --concurrency=1 keeps one claim in flight at
+    # a time, which is all the RAM allows. --max-tasks-per-child recycles the
+    # process periodically so a leak in a long-lived LLM client cannot creep.
+    command:
+      - celery
+      - --app=agentic_pipeline.worker:celery_app
+      - worker
+      - --beat
+      - --loglevel=info
+      - --concurrency=1
+      - --max-tasks-per-child=20
+    mem_limit: ${MEM_WORKER:-420m}
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    image: suraksha/gateway:latest
+    restart: unless-stopped
+    env_file: [.env.prod]
+    environment:
+      # The gateway's own default is 127.0.0.1:8000, correct only when both
+      # processes share a host. Here the pipeline is a separate container.
+      PYTHON_BACKEND_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_started
+    mem_limit: ${MEM_GATEWAY:-192m}
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - gateway
+    mem_limit: ${MEM_NGINX:-64m}
+
+volumes:
+  pgdata:
+  redisdata:

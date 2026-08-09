@@ -1,0 +1,26 @@
+# Express upload gateway (backend/server.js).
+#
+# Node 20 LTS on Alpine: this image only needs express/multer/axios and the S3
+# SDK, all pure JS, so the slim base is safe and saves ~150 MB on a free-tier
+# 30 GB volume.
+FROM node:20-alpine
+
+ENV NODE_ENV=production
+
+WORKDIR /app
+
+# Lockfile-first so `npm ci` is cached independently of server.js edits.
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY backend/server.js ./server.js
+
+# uploads/ is the content-addressed blob root used when S3_BUCKET is unset. In
+# the AWS deployment S3 is configured and this stays essentially empty, but the
+# multer temp dir is still written here, so it must be owned by the run user.
+RUN mkdir -p uploads/tmp && chown -R node:node /app
+USER node
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

@@ -43,7 +43,7 @@ def _fetch_s3(ref: str) -> bytes:
     # s3://bucket/key -> GetObject. boto3 is imported lazily so dev/tests never
     # need it installed.
     try:
-        import boto3  # type: ignore
+        from agentic_pipeline.blobs import get_s3_client  # noqa: WPS433 (lazy: pulls boto3)
     except ImportError as exc:  # pragma: no cover - prod-only path
         raise NotImplementedError(
             "s3:// file_ref requires boto3; install it or use fs:// in dev."
@@ -52,7 +52,9 @@ def _fetch_s3(ref: str) -> bytes:
     bucket, _, key = without_scheme.partition("/")
     if not bucket or not key:
         raise ValueError(f"Malformed s3 URI: {ref!r}")
-    obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+    # Same client builder as blobs.py so a MinIO endpoint configured for the
+    # blob store is honoured here too, instead of silently hitting real S3.
+    obj = get_s3_client().get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
 
 

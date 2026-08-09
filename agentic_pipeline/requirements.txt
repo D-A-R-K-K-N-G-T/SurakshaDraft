@@ -7,6 +7,16 @@ langchain-ibm
 python-dotenv
 pillow
 
+# --- HTTP service (agentic_pipeline/service.py) ---
+# These were previously assumed to be present in the ambient environment; the
+# container image has nothing but this file, so they are pinned here.
+fastapi
+uvicorn[standard]
+# Only imported when auth_mode == "firebase" (the config default). If a
+# deployment runs auth_mode=disabled|demo this can be dropped — it is the
+# single heaviest dependency in the image.
+firebase-admin
+
 # --- persistence (Phase 1: database foundation) ---
 SQLAlchemy>=2.0
 alembic>=1.13

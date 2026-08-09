@@ -1,4 +1,8 @@
 .env
+# Filled-in deployment config: DB password, PII master key, LLM keys.
+.env.prod
+# Firebase service-account JSON, mounted into the containers at /app/secrets.
+secrets/
 
 __pycache__/
 *.pyc

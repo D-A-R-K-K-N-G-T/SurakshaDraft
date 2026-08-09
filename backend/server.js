@@ -9,18 +9,27 @@ const { S3Client, PutObjectCommand, HeadObjectCommand } = require('@aws-sdk/clie
 
 const app = express();
 const port = process.env.PORT || 3000;
-const PYTHON_BACKEND_URL = 'http://127.0.0.1:8000';
+// Loopback is right when both processes share a host (dev). Under compose the
+// pipeline is a separate container, so this is overridden to http://pipeline:8000.
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 let s3Client = null;
 if (process.env.S3_BUCKET) {
+  // MinIO needs an explicit endpoint, path-style addressing, and static keys.
+  // Real S3 needs none of them: leave S3_ENDPOINT_URL/S3_ACCESS_KEY unset and
+  // the SDK resolves the regional endpoint plus the EC2 instance role.
+  const usingMinio = Boolean(process.env.S3_ENDPOINT_URL);
   s3Client = new S3Client({
-    endpoint: process.env.S3_ENDPOINT_URL || 'http://localhost:9000',
     region: process.env.AWS_REGION || 'us-east-1',
-    credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY || 'minioadmin',
-      secretAccessKey: process.env.S3_SECRET_KEY || 'minioadmin',
-    },
-    forcePathStyle: true,
+    ...(usingMinio ? { endpoint: process.env.S3_ENDPOINT_URL, forcePathStyle: true } : {}),
+    ...(process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY
+      ? {
+          credentials: {
+            accessKeyId: process.env.S3_ACCESS_KEY,
+            secretAccessKey: process.env.S3_SECRET_KEY,
+          },
+        }
+      : {}),
   });
 }
 
