@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:804457732869:android:44060083716de76194b56c",
         "android_client_info": {
-          "package_name": "com.example.learningdart"
+          "package_name": "com.surakshadraft.app"
         }
       },
       "oauth_client": [
@@ -17,7 +17,7 @@
           "client_id": "804457732869-j6osrqheuhp1hftf6bhq95r1cssqtior.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.learningdart",
+            "package_name": "com.surakshadraft.app",
             "certificate_hash": "dfd38686e0e25711bc7a510067e1442d4cc131fa"
           }
         },
