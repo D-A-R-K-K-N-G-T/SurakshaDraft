@@ -131,9 +131,9 @@ class _PreviewConfirmScreenState extends State<PreviewConfirmScreen> {
     }
   }
 
-  void _continue({required bool withItems}) {
+  Future<void> _continue({required bool withItems}) async {
     final confirmed = withItems ? _items.map((e) => e.toJson()).toList() : null;
-    Navigator.pushReplacement(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ClaimFormScreen(
@@ -150,6 +150,8 @@ class _PreviewConfirmScreenState extends State<PreviewConfirmScreen> {
         ),
       ),
     );
+    if (!mounted) return;
+    Navigator.pop(context, result);
   }
 
   @override

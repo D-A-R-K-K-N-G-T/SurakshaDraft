@@ -105,26 +105,41 @@ class _CameraScreenState extends State<CameraScreen> {
       // 4. Geotag & Timestamp (NO AI verification!)
       setState(() => _statusMessage = 'Geotagging & Timestamping Evidence...');
 
-      Position currentPosition = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 10),
-        ),
-      ).catchError((_) async {
-        return await Geolocator.getLastKnownPosition() ??
-            Position(
-              longitude: 80.2341,
-              latitude: 13.0418,
-              timestamp: DateTime.now(),
-              accuracy: 10.0,
-              altitude: 0.0,
-              heading: 0.0,
-              speed: 0.0,
-              speedAccuracy: 0.0,
-              altitudeAccuracy: 0.0,
-              headingAccuracy: 0.0,
-            );
-      });
+      // Default used if we can't get a fix quickly. On an emulator with no GPS
+      // location set, a high-accuracy fix can hang indefinitely — and the
+      // plugin's own timeLimit does not always fire — so we cap the wait with a
+      // hard outer timeout and fall back to last-known / a default position.
+      Position fallback() => Position(
+            longitude: 80.2341,
+            latitude: 13.0418,
+            timestamp: DateTime.now(),
+            accuracy: 10.0,
+            altitude: 0.0,
+            heading: 0.0,
+            speed: 0.0,
+            speedAccuracy: 0.0,
+            altitudeAccuracy: 0.0,
+            headingAccuracy: 0.0,
+          );
+
+      debugPrint('[geotag] acquiring location...');
+      Position currentPosition;
+      try {
+        // Wrap the WHOLE acquisition (last-known + current) in ONE hard cap, so
+        // no single call — including getLastKnownPosition, which can also hang
+        // on an emulator — can stall the flow. On timeout we take the fallback.
+        currentPosition = await (() async {
+          final last = await Geolocator.getLastKnownPosition();
+          if (last != null) return last;
+          return await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+          );
+        })().timeout(const Duration(seconds: 6));
+        debugPrint('[geotag] got fix: ${currentPosition.latitude}, ${currentPosition.longitude}');
+      } catch (e) {
+        debugPrint('[geotag] no fix within 6s, using fallback: $e');
+        currentPosition = fallback();
+      }
 
       final now = DateTime.now();
       final formattedTimestamp = DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
