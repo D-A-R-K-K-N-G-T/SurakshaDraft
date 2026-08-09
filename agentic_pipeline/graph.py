@@ -27,18 +27,21 @@ from agentic_pipeline.prompts import (
     POLICY_SYSTEM_PROMPT, POLICY_HUMAN_PROMPT_TEMPLATE,
     RECONCILIATION_SYSTEM_PROMPT, RECONCILIATION_HUMAN_PROMPT_TEMPLATE,
     DRAFTER_SYSTEM_PROMPT, DRAFTER_HUMAN_PROMPT_TEMPLATE,
-    QC_GUARDIAN_SYSTEM_PROMPT, QC_GUARDIAN_HUMAN_PROMPT_TEMPLATE
+    QC_GUARDIAN_SYSTEM_PROMPT, QC_GUARDIAN_HUMAN_PROMPT_TEMPLATE,
+    CLAIM_TYPE_SYSTEM_PROMPT, CLAIM_TYPE_HUMAN_PROMPT_TEMPLATE
 )
 from agentic_pipeline.schemas import (
     LineItem, VisionOutput, ValueSource, PolicyStatus,
     PendingVerificationItem, RejectedItem, ValuationOutput,
     PolicyOutput, ReconciliationOutput, PlausibilityOutput,
     DraftOutput, QCGuardOutput, DocumentRecord, DocumentExtractionOutput,
-    PolicyExtractionOutput, DocumentTriageOutput, DocumentKind, TriageVerdict
+    PolicyExtractionOutput, DocumentTriageOutput, DocumentKind, TriageVerdict,
+    ClaimTypeClassification
 )
 from agentic_pipeline.state import ClaimState
 from agentic_pipeline.images import build_image_block, load_image_as_data_url
 from agentic_pipeline.config import settings, DEPRECIATION_BY_CATEGORY, DEPRECIATION_DEFAULT
+from agentic_pipeline import requirements as reqs
 
 
 def _depreciation_for(category: str | None) -> float:
@@ -65,12 +68,10 @@ def _parse_iso_datetime(value) -> datetime | None:
 
 
 # Which document kinds legitimately belong in each client-declared slot.
-# A slot absent from this map is never gated.
-ROLE_EXPECTED_KINDS = {
-    "PolicyDocument": {DocumentKind.POLICY_SCHEDULE},
-    "GovtID": {DocumentKind.GOVT_ID},
-    "Invoice": {DocumentKind.TAX_INVOICE, DocumentKind.PREMIUM_RECEIPT, DocumentKind.STOCK_REGISTER},
-}
+# A slot absent from this map is never gated. Defined in requirements.py because
+# the LOR matcher needs the same map to guess, before triage has run, which
+# requirement an upload was meant to answer; re-exported here unchanged.
+ROLE_EXPECTED_KINDS = reqs.ROLE_EXPECTED_KINDS
 # Only these slots can fail a claim. A misfiled invoice is a warning, not a block.
 BLOCKING_ROLES = {"PolicyDocument", "GovtID"}
 # The model's explicit "I cannot tell" answers — never blocking.
@@ -252,6 +253,188 @@ def document_triage_node(state: ClaimState) -> dict:
     return out
 
 
+def _claim_type_photo_blocks(state: ClaimState, limit: int = 3) -> list[dict]:
+    """A few damage photos for the classifier. Best-effort: unreadable files are
+    silently skipped, since the text description alone is usually enough."""
+    blocks = []
+    for e in state.evidence[:limit]:
+        try:
+            blocks.append(build_image_block(load_image_as_data_url(e.file_ref)))
+        except Exception:
+            continue
+    return blocks
+
+
+def claim_type_classify_node(state: ClaimState) -> dict:
+    """Decide which section of the insurer's master LOR governs this claim.
+
+    The claimant never confirms this inference, so it is deliberately allowed to
+    say "I don't know": a low-confidence or close-run answer sets
+    claim_type_ambiguous, and requirements_node then unions the candidate
+    sections and blocks on none of them. Same asymmetry as _triage_verdict —
+    a high bar before anything can act against the claimant.
+
+    Skipped entirely once a claimant has corrected the claim type, so their
+    override survives every re-run after a re-upload.
+    """
+    if state.claim_type_source == "user_override":
+        return {}
+
+    ruleset = reqs.load_ruleset(state.policy.get("insurer"))
+    if ruleset is None or not ruleset.claim_types:
+        # A flat ruleset with no sections: every rule is universal anyway.
+        return {}
+
+    sections = ruleset.claim_types
+    valid_ids = {s.id for s in sections}
+    catalogue = "\n".join(
+        f"- id={s.id} | {s.label} | {s.description} | also described as: {', '.join(s.aliases) or 'n/a'}"
+        for s in sections
+    )
+    photos = _claim_type_photo_blocks(state)
+    content = [{
+        "type": "text",
+        "text": CLAIM_TYPE_HUMAN_PROMPT_TEMPLATE.format(
+            claim_types=catalogue,
+            description=state.event.get("description") or "(no description supplied)",
+            item_type=state.event.get("item_type") or "(not stated)",
+            categories=", ".join(state.policy.get("asset_categories") or []) or "(not stated)",
+            photo_note=(
+                "SECONDARY EVIDENCE — photographs of the damage follow. They show "
+                "what was damaged, not what caused it. Use them to corroborate the "
+                "description; if they disagree with it, follow the description and "
+                "lower your confidence."
+                if photos
+                else "No photographs are available; judge from the description alone."
+            ),
+        ),
+    }]
+    content.extend(photos)
+
+    llm = get_structured_llm(ClaimTypeClassification, want_vision=bool(photos))
+    try:
+        result: ClaimTypeClassification = invoke_structured(llm, [
+            SystemMessage(content=CLAIM_TYPE_SYSTEM_PROMPT),
+            HumanMessage(content=content),
+        ])
+    except Exception as exc:
+        # Fail open to universal-only requirements rather than guessing a section.
+        return {"warnings": [
+            f"Could not determine the claim type automatically ({type(exc).__name__}); "
+            f"your checklist covers the documents needed for every claim."
+        ]}
+
+    # The model is constrained to these ids by the prompt, but never trust that.
+    if result.claim_type_id not in valid_ids:
+        _log.warning("claim_type classifier returned unknown id %r", result.claim_type_id)
+        return {"warnings": [
+            "Could not match this loss to one of your insurer's claim types; "
+            "your checklist covers the documents needed for every claim."
+        ]}
+
+    # Drop unknown ids, and drop any alternate that just echoes the primary —
+    # models do repeat their own answer, and letting that through makes
+    # runner_up == confidence, manufacturing ambiguity out of agreement.
+    seen = {result.claim_type_id}
+    alternates = []
+    for a in result.alternates:
+        if a.claim_type_id in valid_ids and a.claim_type_id not in seen:
+            seen.add(a.claim_type_id)
+            alternates.append(a)
+
+    runner_up = max((a.confidence for a in alternates), default=0.0)
+    ambiguous = (
+        result.confidence < settings.claim_type_min_confidence
+        or (result.confidence - runner_up) < settings.claim_type_margin
+    )
+    candidates = [result.claim_type_id] + [a.claim_type_id for a in alternates]
+
+    _log.info(
+        "claim_type=%s conf=%.2f runner_up=%.2f ambiguous=%s rationale=%s",
+        result.claim_type_id, result.confidence, runner_up, ambiguous, result.rationale,
+    )
+
+    out = {
+        "claim_type": result.claim_type_id,
+        "claim_type_confidence": result.confidence,
+        "claim_type_source": "inferred",
+        "claim_type_candidates": candidates,
+        "claim_type_ambiguous": ambiguous,
+    }
+    if ambiguous:
+        out["warnings"] = [
+            "The kind of claim could not be determined with confidence, so the "
+            "document checklist covers every possibility and none of it is "
+            "holding the claim up."
+        ]
+    return out
+
+
+def requirements_node(state: ClaimState) -> dict:
+    """Narrow the insurer's master LOR to this claim and check it off.
+
+    Produces the claimant's checklist and decides whether the claim can proceed.
+    Sits upstream of every expensive node, so an unfinishable claim costs two
+    LLM calls rather than a full pipeline run. Fails open in every direction:
+    any error here lets the claim through with a warning.
+    """
+    try:
+        prev = state.lor.revision if state.lor else 1
+        pack = reqs.build_lor(
+            policy=state.policy,
+            event=state.event,
+            documents=state.documents,
+            evidence=state.evidence,
+            basis=reqs.BASIS_NARROWED,
+            revision=prev + 1,
+            claim_type=state.claim_type,
+            claim_type_confidence=state.claim_type_confidence,
+            candidate_types=state.claim_type_candidates,
+            ambiguous=state.claim_type_ambiguous,
+        )
+    except Exception as exc:
+        _log.exception("requirements_node failed")
+        return {"warnings": [
+            f"Could not build the document checklist ({type(exc).__name__}); "
+            f"the claim was allowed to proceed."
+        ]}
+
+    blocked = bool(pack.blocking_missing) and settings.lor_gate_mode == "enforce"
+    out = {"lor": pack, "awaiting_documents": blocked}
+    if pack.blocking_missing and not blocked:
+        out["warnings"] = [
+            "Documents are outstanding for this claim but the requirement gate is "
+            "in warn_only mode, so the claim was processed anyway."
+        ]
+    return out
+
+
+def check_requirements(state: ClaimState):
+    return "awaiting_documents" if state.awaiting_documents else "proceed"
+
+
+def awaiting_documents_node(state: ClaimState) -> dict:
+    """Pause the claim pending documents. NOT a rejection.
+
+    Deliberately does not write intake_reasons — the app renders those under
+    "Why this claim was not accepted", and nothing has been refused here. The
+    claim resumes from the start once the missing files are uploaded.
+    """
+    pack = state.lor
+    outstanding = []
+    if pack:
+        wanted = set(pack.blocking_missing)
+        outstanding = [r.label for r in pack.missing if r.requirement_id in wanted]
+    if outstanding:
+        summary = (
+            "Waiting for these documents before the claim can be assessed: "
+            + ", ".join(outstanding)
+        )
+    else:
+        summary = "Waiting for outstanding documents before the claim can be assessed."
+    return {"warnings": [summary]}
+
+
 def policy_extract_node(state: ClaimState) -> dict:
     """Read the insured's actual policy schedule and replace the assumed terms.
 
@@ -262,6 +445,11 @@ def policy_extract_node(state: ClaimState) -> dict:
     """
     policy_docs = [d for d in state.documents if d.document_type == "PolicyDocument"]
     if not policy_docs:
+        return {}
+
+    # Already read on an earlier run (the claim was paused for documents and has
+    # since resumed) — re-reading the same schedule would just burn a vision call.
+    if state.policy.get("terms_source") == "policy_document":
         return {}
 
     # Never read terms off a file triage positively identified as something else
@@ -1100,6 +1288,9 @@ def proof_of_intimation_node(state: ClaimState) -> dict:
 graph_builder = StateGraph(ClaimState)
 
 graph_builder.add_node("document_triage", document_triage_node)
+graph_builder.add_node("claim_type_classify", claim_type_classify_node)
+graph_builder.add_node("requirements_check", requirements_node)
+graph_builder.add_node("awaiting_documents", awaiting_documents_node)
 graph_builder.add_node("policy_extract", policy_extract_node)
 graph_builder.add_node("intake", intake_node)
 graph_builder.add_node("intake_rejected", intake_rejected_node)
@@ -1118,7 +1309,15 @@ graph_builder.add_node("send", send_node)
 graph_builder.add_node("proof_of_intimation", proof_of_intimation_node)
 
 graph_builder.add_edge(START, "document_triage")
-graph_builder.add_edge("document_triage", "policy_extract")
+graph_builder.add_edge("document_triage", "claim_type_classify")
+graph_builder.add_edge("claim_type_classify", "requirements_check")
+# The requirement gate sits ahead of every expensive node, so a claim that
+# cannot be completed costs two LLM calls instead of a dozen.
+graph_builder.add_conditional_edges("requirements_check", check_requirements, {
+    "proceed": "policy_extract",
+    "awaiting_documents": "awaiting_documents",
+})
+graph_builder.add_edge("awaiting_documents", END)
 graph_builder.add_edge("policy_extract", "intake")
 graph_builder.add_conditional_edges("intake", check_intake, {
     "proceed": "evidence_verify",

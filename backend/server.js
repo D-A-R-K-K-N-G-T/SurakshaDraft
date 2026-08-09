@@ -45,7 +45,7 @@ const CLAIM_UPLOAD_FIELDS = upload.any();
 // Group multer's flat req.files array (from upload.any()) by fieldname into the
 // role buckets constructClaimState expects.
 function groupFilesByField(fileArray) {
-  const grouped = { photos: [], invoices: [], govt_id: [], policy_doc: [] };
+  const grouped = { photos: [], invoices: [], govt_id: [], policy_doc: [], supporting: [] };
   (fileArray || []).forEach((f) => {
     if (f.fieldname === 'photos' || f.fieldname === 'files') {
       // "files" is the legacy single-bucket field from older app builds; treat
@@ -58,6 +58,41 @@ function groupFilesByField(fileArray) {
     }
   });
   return grouped;
+}
+
+// Document slots. "supporting" is the catch-all for LOR checklist uploads that
+// are not one of the three known roles. It is deliberately absent from the
+// pipeline's ROLE_EXPECTED_KINDS, so such a file is never slot-gated — the
+// requirement matcher judges it by its actual kind, or by its requirement_id.
+const DOC_SPECS = [
+  { bucket: 'invoices',   type: 'Invoice',        prefix: 'DOC-INV', role: 'invoice' },
+  { bucket: 'govt_id',    type: 'GovtID',         prefix: 'DOC-KYC', role: 'govt_id' },
+  { bucket: 'policy_doc', type: 'PolicyDocument', prefix: 'DOC-POL', role: 'policy_doc' },
+  { bucket: 'supporting', type: 'Supporting',     prefix: 'DOC-SUP', role: 'supporting' },
+];
+
+// Build DocumentRecords from grouped uploads. Shared by the initial submit and
+// by the LOR re-upload route so document ids, hashes and path resolution are
+// produced in exactly one place.
+// `onDigest` is optional: submit uses it for the same-file-under-two-roles check.
+// `requirementId` tags every record with the checklist row it answers, which is
+// the only thing that can satisfy an `attested` requirement.
+function buildDocumentRecords(grouped, requirementId, onDigest) {
+  const documents = [];
+  DOC_SPECS.forEach(({ bucket, type, prefix, role }) => {
+    (grouped[bucket] || []).forEach((file, index) => {
+      if (onDigest) onDigest(sha256OfFile(file.path), role);
+      const record = {
+        document_id: `${prefix}-${Date.now()}-${index}`,
+        document_type: type,
+        file_ref: path.resolve(file.path),
+        uploaded_at: new Date().toISOString(),
+      };
+      if (requirementId) record.requirement_id = requirementId;
+      documents.push(record);
+    });
+  });
+  return documents;
 }
 
 // UI category label (from the app's _itemTypesByCategory) -> pipeline category.
@@ -150,13 +185,11 @@ function buildPolicy(body) {
 }
 
 // Helper to construct ClaimState from frontend data
-const constructClaimState = (body, files) => {
+const constructClaimState = (body, files, accountType) => {
   const evidence = [];
   const documents = [];
 
   const photos = (files && files.photos) || [];
-  const invoices = (files && files.invoices) || [];
-  const govtIds = (files && files.govt_id) || [];
   const policyDocs = (files && files.policy_doc) || [];
 
   // Capture metadata sent by the app. Fall back to upload time / no-geo, and
@@ -184,22 +217,7 @@ const constructClaimState = (body, files) => {
     });
   });
 
-  const docSpecs = [
-    { list: invoices, type: 'Invoice', prefix: 'DOC-INV', role: 'invoice' },
-    { list: govtIds, type: 'GovtID', prefix: 'DOC-KYC', role: 'govt_id' },
-    { list: policyDocs, type: 'PolicyDocument', prefix: 'DOC-POL', role: 'policy_doc' },
-  ];
-  docSpecs.forEach(({ list, type, prefix, role }) => {
-    list.forEach((file, index) => {
-      noteDigest(sha256OfFile(file.path), role);
-      documents.push({
-        document_id: `${prefix}-${Date.now()}-${index}`,
-        document_type: type,
-        file_ref: path.resolve(file.path),
-        uploaded_at: new Date().toISOString(),
-      });
-    });
-  });
+  documents.push(...buildDocumentRecords(files, null, noteDigest));
 
   // Deterministic, un-gameable duplicate check: the SAME file (same SHA-256)
   // uploaded under two DIFFERENT roles is a substitution (e.g. one PDF used as
@@ -272,6 +290,12 @@ const constructClaimState = (body, files) => {
     event: {
       event_date: body.event_date || new Date().toISOString(),
       description: body.description || 'User reported flood damage.',
+      // Both feed LOR narrowing: item_type and account_type are matched against
+      // each requirement's applies_when, and the description drives claim-type
+      // classification. item_type is the app's own label (e.g. "Stock, Inventory
+      // & Raw Materials"), NOT the mapped pipeline category.
+      item_type: body.item_type || '',
+      account_type: accountType || '',
     },
     evidence: evidence,
     documents: documents,
@@ -296,14 +320,72 @@ async function handleSubmit(category, req, res) {
     if (missing.length) {
       return res.status(400).json({ error: 'Required documents missing.', missing });
     }
-    const claimState = constructClaimState(req.body, grouped);
+    const claimState = constructClaimState(req.body, grouped, category);
     const response = await axios.post(`${PYTHON_BACKEND_URL}/api/v1/claim/submit`, claimState);
+    // response.data carries the instant revision-1 LOR alongside claim_id, and
+    // is passed through untouched — the app renders the checklist from it.
     res.json({ success: true, category, data: response.data });
   } catch (error) {
     console.error(`Pipeline Error (${category}):`, error.message);
     res.status(500).json({ error: 'Failed to submit claim to the pipeline.' });
   }
 }
+
+// Attach documents to an existing claim from the LOR checklist, then let the
+// pipeline resume. `requirement_id` names the checklist row being answered.
+app.post('/api/claim/:claim_id/documents', CLAIM_UPLOAD_FIELDS, async (req, res) => {
+  try {
+    const grouped = groupFilesByField(req.files);
+    const documents = buildDocumentRecords(grouped, req.body.requirement_id || null, null);
+    if (!documents.length) {
+      return res.status(400).json({ error: 'No documents supplied.' });
+    }
+    const response = await axios.post(
+      `${PYTHON_BACKEND_URL}/api/v1/claim/${req.params.claim_id}/documents`,
+      { documents }
+    );
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    const detail = error.response && error.response.data
+      ? error.response.data
+      : { error: 'Failed to attach documents to the claim.' };
+    console.error('Add-documents Error:', error.message);
+    res.status(status).json(detail);
+  }
+});
+
+// Correct a wrongly inferred claim type and rebuild the checklist. Deterministic
+// on the pipeline side — no graph run, no LLM call.
+app.post('/api/claim/:claim_id/claim-type', async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${PYTHON_BACKEND_URL}/api/v1/claim/${req.params.claim_id}/claim-type`,
+      { claim_type_id: req.body.claim_type_id }
+    );
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    const detail = error.response && error.response.data
+      ? error.response.data
+      : { error: 'Failed to update the claim type.' };
+    console.error('Claim-type Error:', error.message);
+    res.status(status).json(detail);
+  }
+});
+
+// Read back a ruleset — populates the app's claim-type picker.
+app.get('/api/requirements/:slug', async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${PYTHON_BACKEND_URL}/api/v1/requirements/${encodeURIComponent(req.params.slug)}`
+    );
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    res.status(status).json({ error: 'Failed to fetch the requirement list.' });
+  }
+});
 
 app.post('/api/personal/submit', CLAIM_UPLOAD_FIELDS, (req, res) => handleSubmit('personal', req, res));
 app.post('/api/commercial/submit', CLAIM_UPLOAD_FIELDS, (req, res) => handleSubmit('commercial', req, res));

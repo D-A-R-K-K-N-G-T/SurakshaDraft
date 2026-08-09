@@ -22,6 +22,7 @@ from agentic_pipeline.schemas import (
     DraftOutput,
     QCGuardOutput,
     DocumentRecord,
+    LORPack,
 )
 
 
@@ -69,10 +70,30 @@ class ClaimState(BaseModel):
     # reconciliation_agent fires, switch this to operator.add.
     pending_signals: list[VisionMissingSignal] = []
 
+    # --- Letter of Requirement ---
+    # The claimant's document checklist. Revision 1 is computed synchronously at
+    # submit from universal rules only; requirements_node overwrites it with the
+    # claim-type-narrowed pack once triage and classification have run.
+    # Last-write-wins: making it additive would append packs instead of replacing.
+    lor: Optional[LORPack] = None
+    # True when a BLOCKING requirement is genuinely absent. Distinct from
+    # intake_ok=False: the claim is not rejected, it is paused pending documents.
+    awaiting_documents: bool = False
+
+    # Which section of the master LOR applies. Inferred by claim_type_classify_node
+    # unless claim_type_source == "user_override", which that node then never
+    # touches again — a claimant's correction must survive every re-run.
+    claim_type: Optional[str] = None
+    claim_type_confidence: Optional[float] = None
+    claim_type_source: Optional[str] = None  # "inferred" | "user_override"
+    # Runner-up sections, kept when the classifier could not settle on one.
+    claim_type_candidates: list[str] = []
+    claim_type_ambiguous: bool = False
+
     reserve_estimate: Optional[dict] = None
     draft_pack: Optional[DraftOutput] = None
     qc: Optional[QCGuardOutput] = None
     proof_receipt: Optional[dict] = None
-    
+
     valuation_retries: int = 0
     qc_retries: int = 0

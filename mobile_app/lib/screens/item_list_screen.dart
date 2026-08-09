@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../config.dart';
 import '../models/claim_model.dart';
+import '../models/lor_model.dart';
+import 'lor_checklist_screen.dart';
 import 'upload_policy_screen.dart';
 
 class ItemListScreen extends StatefulWidget {
@@ -291,13 +293,16 @@ class _ItemListScreenState extends State<ItemListScreen> {
             final draftPack = state['draft_pack'] ?? {};
             final statusText = _summarizePolicyStatus(state);
             final index = _claims.indexWhere((c) => c.id == claimId);
-            if (index != -1 && _claims[index].status == ClaimStatus.pending) {
+            // Accept any non-review state: after a re-upload the claim resumes
+            // from awaitingDocuments, not from pending.
+            if (index != -1 && _claims[index].status != ClaimStatus.review) {
               setState(() {
                 _claims[index] = _claims[index].copyWith(
                   status: ClaimStatus.review,
                   draftPackSummary: _buildDraftSummary(draftPack, state),
                   aiReasoning: 'AI completed analysis and generated the draft pack.',
                   policyStatusText: statusText,
+                  lor: LorPack.tryFrom(state['lor']),
                 );
               });
               ScaffoldMessenger.of(context).showSnackBar(
@@ -317,10 +322,41 @@ class _ItemListScreenState extends State<ItemListScreen> {
               );
             }
             return;
+          } else if (data['status'] == 'awaiting_documents') {
+            // Terminal for THIS run, but not a failure and not a rejection —
+            // the claim resumes once the outstanding documents arrive. Must
+            // stop polling here, or the loop burns all 40 attempts and reports
+            // a timeout for a claim that is simply waiting on the user.
+            final state = data['state'] ?? {};
+            final pack = LorPack.tryFrom(state['lor']);
+            final index = _claims.indexWhere((c) => c.id == claimId);
+            if (index != -1) {
+              setState(() {
+                _claims[index] = _claims[index].copyWith(
+                  status: ClaimStatus.awaitingDocuments,
+                  lor: pack,
+                  policyStatusText: 'DOCUMENTS NEEDED',
+                  aiReasoning:
+                      'Some documents your insurer requires for this kind of '
+                      'claim are still outstanding.',
+                );
+              });
+              final count = pack?.blockingMissing.length ?? 0;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(count > 0
+                      ? '$count more document${count == 1 ? '' : 's'} needed — tap the claim to see the checklist.'
+                      : 'More documents are needed — tap the claim to see the checklist.'),
+                  backgroundColor: const Color(0xFFD97706),
+                  duration: const Duration(seconds: 5),
+                ),
+              );
+            }
+            return;
           } else if (data['status'] == 'failed') {
             debugPrint('Pipeline failed: ${data['error']}');
             final index = _claims.indexWhere((c) => c.id == claimId);
-            if (index != -1 && _claims[index].status == ClaimStatus.pending) {
+            if (index != -1 && _claims[index].status != ClaimStatus.review) {
               setState(() {
                 _claims[index] = _claims[index].copyWith(
                   status: ClaimStatus.review, // Or keep pending but show error
@@ -347,13 +383,49 @@ class _ItemListScreenState extends State<ItemListScreen> {
     }
   }
 
+  /// Opens the document checklist. When the user uploads something the screen
+  /// pops with `true`, meaning the pipeline is running again — so resume polling.
+  Future<void> _openChecklist(ClaimRecord claim) async {
+    final pack = claim.lor;
+    if (pack == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No document checklist is available for this claim yet.'),
+          backgroundColor: Colors.amber,
+        ),
+      );
+      return;
+    }
+    final resumed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LorChecklistScreen(claimId: claim.id, pack: pack),
+      ),
+    );
+    if (resumed == true && mounted) {
+      final index = _claims.indexWhere((c) => c.id == claim.id);
+      if (index != -1) {
+        setState(() {
+          _claims[index] = _claims[index].copyWith(status: ClaimStatus.pending);
+        });
+      }
+      _pollClaimStatus(claim.id);
+    }
+  }
+
   List<ClaimRecord> get _filteredClaims {
     if (_selectedFilter == 'All') return _claims;
     if (_selectedFilter == 'Submitted') {
       return _claims.where((c) => c.status == ClaimStatus.submitted).toList();
     }
     if (_selectedFilter == 'Pending') {
-      return _claims.where((c) => c.status == ClaimStatus.pending).toList();
+      // A claim waiting on documents is still outstanding work for the user, so
+      // it belongs in the same bucket rather than disappearing from every filter.
+      return _claims
+          .where((c) =>
+              c.status == ClaimStatus.pending ||
+              c.status == ClaimStatus.awaitingDocuments)
+          .toList();
     }
     if (_selectedFilter == 'Review') {
       return _claims.where((c) => c.status == ClaimStatus.review).toList();
@@ -728,7 +800,9 @@ There are currently no rejected items.''',
                   _buildFilterChip(
                       'Pending',
                       _claims
-                          .where((c) => c.status == ClaimStatus.pending)
+                          .where((c) =>
+                              c.status == ClaimStatus.pending ||
+                              c.status == ClaimStatus.awaitingDocuments)
                           .length),
                   _buildFilterChip(
                       'Review',
@@ -873,11 +947,21 @@ There are currently no rejected items.''',
         statusTextColor = const Color(0xFF2563EB);
         statusText = 'Review (Draft Ready)';
         break;
+      case ClaimStatus.awaitingDocuments:
+        statusBgColor = const Color(0xFFFEF2F2);
+        statusTextColor = const Color(0xFFDC2626);
+        final n = claim.lor?.blockingMissing.length ?? 0;
+        statusText = n > 0
+            ? 'Documents needed ($n)'
+            : 'Documents needed';
+        break;
     }
 
     return GestureDetector(
       onTap: () {
-        if (claim.status == ClaimStatus.review) {
+        if (claim.status == ClaimStatus.awaitingDocuments) {
+          _openChecklist(claim);
+        } else if (claim.status == ClaimStatus.review) {
           _showDraftPackReviewModal(claim);
         } else if (claim.status == ClaimStatus.pending) {
           _showPendingStatusModal(claim);

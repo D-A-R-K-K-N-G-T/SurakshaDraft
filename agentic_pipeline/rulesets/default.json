@@ -1,0 +1,301 @@
+{
+  "ruleset_id": "default",
+  "version": "2026-08-09",
+  "source": "hand-authored fallback — standard Indian general-insurance document lists",
+  "claim_types": [
+    {
+      "id": "fire",
+      "label": "Fire & Allied Perils",
+      "description": "Damage to insured property or stock by fire, lightning, explosion, riot, strike, malicious damage, storm, cyclone, flood or inundation.",
+      "aliases": ["fire", "burnt", "burned", "flood", "flooded", "inundation", "water damage", "storm", "cyclone", "lightning", "explosion", "riot", "rain damage"]
+    },
+    {
+      "id": "burglary",
+      "label": "Burglary & Theft",
+      "description": "Loss of property by theft, or by burglary or housebreaking involving forcible and violent entry to or exit from the premises.",
+      "aliases": ["theft", "stolen", "burglary", "break-in", "broke in", "housebreaking", "robbery", "looted"]
+    },
+    {
+      "id": "motor",
+      "label": "Motor Own Damage",
+      "description": "Accidental damage to, or theft of, an insured motor vehicle including cars, bikes and commercial vehicles.",
+      "aliases": ["accident", "collision", "vehicle", "car", "bike", "motorcycle", "truck", "crash", "dent", "hit"]
+    },
+    {
+      "id": "machinery_breakdown",
+      "label": "Machinery Breakdown",
+      "description": "Sudden and unforeseen internal mechanical or electrical breakdown of plant and machinery, not caused by an external peril.",
+      "aliases": ["breakdown", "malfunction", "seized", "burnt out motor", "mechanical failure", "electrical failure", "short circuit"]
+    },
+    {
+      "id": "electronic_equipment",
+      "label": "Electronic Equipment",
+      "description": "Damage to computers, servers, medical or other electronic equipment by any cause not otherwise excluded.",
+      "aliases": ["computer", "laptop", "server", "monitor", "electronic", "power surge", "voltage fluctuation"]
+    },
+    {
+      "id": "personal_accident",
+      "label": "Personal Accident & Medical",
+      "description": "Bodily injury, disablement or medical treatment arising from an accident.",
+      "aliases": ["injury", "injured", "hospital", "accident to person", "fracture", "medical treatment"]
+    }
+  ],
+  "rules": [
+    {
+      "requirement_id": "REQ-POLICY",
+      "label": "Policy schedule",
+      "help_text": "The page your insurer issued showing your policy number and the period of insurance.",
+      "claim_types": [],
+      "verification": "classified",
+      "accepts": ["policy_schedule"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-ID",
+      "label": "Government photo ID",
+      "help_text": "Aadhaar, PAN, Voter ID, Driving Licence or Passport. A masked Aadhaar is fine.",
+      "claim_types": [],
+      "verification": "classified",
+      "accepts": ["govt_id"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-PHOTOS",
+      "label": "Photographs of the damage",
+      "help_text": "Clear photographs of the damaged property taken at the location of the loss.",
+      "claim_types": [],
+      "verification": "classified",
+      "accepts": ["damage_photograph"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-BANK",
+      "label": "Cancelled cheque or bank passbook",
+      "help_text": "Needed to settle the claim directly to your account. The name, account number and IFSC must be legible.",
+      "claim_types": [],
+      "verification": "classified",
+      "accepts": ["bank_proof"],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-CLAIMFORM",
+      "label": "Signed claim form",
+      "help_text": "The insurer's claim form, completed and signed. We prepare a draft for you — you only need to sign and upload it.",
+      "claim_types": [],
+      "verification": "attested",
+      "accepts": [],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+
+    {
+      "requirement_id": "REQ-FIRE-BRIGADE",
+      "label": "Fire brigade report",
+      "help_text": "The report issued by the fire service that attended the incident.",
+      "claim_types": ["fire"],
+      "verification": "classified",
+      "accepts": ["fire_brigade_report"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-FIRE-FIR",
+      "label": "Police FIR (riot, strike or malicious damage only)",
+      "help_text": "Required only where the loss arose from riot, strike or malicious damage.",
+      "claim_types": ["fire"],
+      "verification": "classified",
+      "accepts": ["fir_report"],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-FIRE-STOCK",
+      "label": "Stock statement or purchase invoices",
+      "help_text": "Your stock register, or the purchase invoices covering the damaged stock.",
+      "claim_types": ["fire", "burglary"],
+      "verification": "classified",
+      "accepts": ["tax_invoice", "stock_register"],
+      "severity": "blocking",
+      "applies_when": { "categories": ["Stock"] }
+    },
+    {
+      "requirement_id": "REQ-FIRE-REPAIR-EST",
+      "label": "Repair or reinstatement estimate",
+      "help_text": "A written estimate from a contractor or supplier for repairing or replacing the damaged property.",
+      "claim_types": ["fire"],
+      "verification": "classified",
+      "accepts": ["repair_estimate"],
+      "severity": "blocking",
+      "applies_when": { "categories": ["Property", "Plant & Machinery", "Furniture, Fixtures & Fittings"] }
+    },
+    {
+      "requirement_id": "REQ-FIRE-SUBROG",
+      "label": "Letter of subrogation",
+      "help_text": "Signed on your company letterhead. Your insurer will provide the template.",
+      "claim_types": ["fire"],
+      "verification": "attested",
+      "accepts": [],
+      "severity": "blocking",
+      "applies_when": { "account_types": ["commercial"] }
+    },
+
+    {
+      "requirement_id": "REQ-BURG-FIR",
+      "label": "Police FIR or station diary entry",
+      "help_text": "Registered at the police station covering the location of the loss. Lodge it as soon as possible after discovering the loss.",
+      "claim_types": ["burglary"],
+      "verification": "classified",
+      "accepts": ["fir_report"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-BURG-FINAL-REPORT",
+      "label": "Final police report or non-traceable certificate",
+      "help_text": "Issued by the police once the investigation closes. Send it when you receive it — it is not needed to start the claim.",
+      "claim_types": ["burglary"],
+      "verification": "attested",
+      "accepts": [],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-BURG-INVOICE",
+      "label": "Purchase invoices for the stolen items",
+      "help_text": "Original purchase invoices establishing ownership and value of the items taken.",
+      "claim_types": ["burglary"],
+      "verification": "classified",
+      "accepts": ["tax_invoice"],
+      "severity": "blocking",
+      "applies_when": { "categories": ["Electronics", "Valuables", "Plant & Machinery"] }
+    },
+
+    {
+      "requirement_id": "REQ-MOTOR-RC",
+      "label": "Vehicle registration certificate (RC)",
+      "help_text": "The RC book or card for the insured vehicle.",
+      "claim_types": ["motor"],
+      "verification": "classified",
+      "accepts": ["vehicle_rc"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MOTOR-DL",
+      "label": "Driving licence of the person driving",
+      "help_text": "The licence of whoever was driving at the time of the accident — not necessarily the policyholder.",
+      "claim_types": ["motor"],
+      "verification": "classified",
+      "accepts": ["driving_licence"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MOTOR-EST",
+      "label": "Garage repair estimate",
+      "help_text": "A written estimate from the repairing garage or workshop.",
+      "claim_types": ["motor"],
+      "verification": "classified",
+      "accepts": ["repair_estimate"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MOTOR-FIR",
+      "label": "Police FIR (theft or third-party injury only)",
+      "help_text": "Required where the vehicle was stolen, or where a third party was injured or their property damaged.",
+      "claim_types": ["motor"],
+      "verification": "classified",
+      "accepts": ["fir_report"],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MOTOR-BILL",
+      "label": "Final repair bill and payment receipt",
+      "help_text": "Send these once the repair is complete — they are not needed to start the claim.",
+      "claim_types": ["motor"],
+      "verification": "classified",
+      "accepts": ["repair_bill"],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+
+    {
+      "requirement_id": "REQ-MB-EST",
+      "label": "Repair estimate for the machinery",
+      "help_text": "A written estimate from the repairer or the equipment manufacturer.",
+      "claim_types": ["machinery_breakdown"],
+      "verification": "classified",
+      "accepts": ["repair_estimate"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MB-TECH",
+      "label": "Technician or manufacturer breakdown report",
+      "help_text": "A written account from the engineer who examined the machine, stating what failed and why.",
+      "claim_types": ["machinery_breakdown"],
+      "verification": "attested",
+      "accepts": [],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-MB-INVOICE",
+      "label": "Purchase invoice for the machine",
+      "help_text": "Establishes the age and original value of the machinery.",
+      "claim_types": ["machinery_breakdown"],
+      "verification": "classified",
+      "accepts": ["tax_invoice"],
+      "severity": "advisory",
+      "applies_when": {}
+    },
+
+    {
+      "requirement_id": "REQ-EE-INVOICE",
+      "label": "Purchase invoice for the equipment",
+      "help_text": "Establishes ownership, age and value of the damaged equipment.",
+      "claim_types": ["electronic_equipment"],
+      "verification": "classified",
+      "accepts": ["tax_invoice"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-EE-EST",
+      "label": "Repair estimate or non-repairable certificate",
+      "help_text": "From an authorised service centre. If the equipment cannot be repaired, their written confirmation of that.",
+      "claim_types": ["electronic_equipment"],
+      "verification": "classified",
+      "accepts": ["repair_estimate"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+
+    {
+      "requirement_id": "REQ-PA-MED",
+      "label": "Medical certificate",
+      "help_text": "From the treating doctor, stating the nature of the injury and the treatment given.",
+      "claim_types": ["personal_accident"],
+      "verification": "classified",
+      "accepts": ["medical_certificate"],
+      "severity": "blocking",
+      "applies_when": {}
+    },
+    {
+      "requirement_id": "REQ-PA-BILLS",
+      "label": "Hospital bills and discharge summary",
+      "help_text": "Itemised bills together with the discharge summary from the hospital.",
+      "claim_types": ["personal_accident"],
+      "verification": "attested",
+      "accepts": [],
+      "severity": "blocking",
+      "applies_when": {}
+    }
+  ]
+}

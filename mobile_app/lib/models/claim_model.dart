@@ -1,7 +1,13 @@
+import 'lor_model.dart';
+
 enum ClaimStatus {
   submitted,
   pending,
   review,
+
+  /// Paused pending documents. NOT a rejection and not a failure — the claim
+  /// resumes on its own once the missing files on the LOR checklist arrive.
+  awaitingDocuments,
 }
 
 class ClaimRecord {
@@ -23,6 +29,10 @@ class ClaimRecord {
   final String? draftPackSummary;
   final String? aiReasoning;
   final String? policyStatusText;
+
+  /// The document checklist for this claim. Revision 1 arrives in the submit
+  /// response; later revisions arrive from polling.
+  final LorPack? lor;
   final ClaimStatus status;
 
   ClaimRecord({
@@ -44,6 +54,7 @@ class ClaimRecord {
     this.draftPackSummary,
     this.aiReasoning,
     this.policyStatusText,
+    this.lor,
     this.status = ClaimStatus.pending,
   });
 
@@ -66,6 +77,7 @@ class ClaimRecord {
     String? draftPackSummary,
     String? aiReasoning,
     String? policyStatusText,
+    LorPack? lor,
     ClaimStatus? status,
   }) {
     return ClaimRecord(
@@ -87,6 +99,7 @@ class ClaimRecord {
       draftPackSummary: draftPackSummary ?? this.draftPackSummary,
       aiReasoning: aiReasoning ?? this.aiReasoning,
       policyStatusText: policyStatusText ?? this.policyStatusText,
+      lor: lor ?? this.lor,
       status: status ?? this.status,
     );
   }

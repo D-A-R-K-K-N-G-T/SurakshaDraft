@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     # Loss dates this close to a policy boundary get a warning, not a rejection.
     policy_period_boundary_tolerance_days: int = 1
 
+    # --- LOR / requirements gate ---
+    # The claimant never confirms the inferred claim type, so their checklist is
+    # only allowed to BLOCK on a confident classification. Below this score, or
+    # when the runner-up is within claim_type_margin, the LOR becomes the union
+    # of the candidate sections with everything non-universal demoted to advisory.
+    claim_type_min_confidence: float = 0.70
+    claim_type_margin: float = 0.15
+    # "enforce": missing blocking requirements halt the claim at awaiting_documents.
+    # "warn_only": the checklist is still produced but never halts the pipeline.
+    lor_gate_mode: str = "enforce"
+
 
 settings = Settings()
 

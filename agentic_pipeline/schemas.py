@@ -6,7 +6,7 @@ Python object as input.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -150,6 +150,12 @@ class DocumentKind(str, Enum):
     injected text inside an uploaded file can smuggle in a novel verdict value.
     UNREADABLE and UNKNOWN are the model's explicit "I cannot tell" answers and
     never block a claim.
+
+    This set stays SMALL on purpose. An insurer's master LOR names far more
+    documents than belong here; growing this to 60+ overlapping classes would
+    degrade both the injection defence and classification accuracy. Requirements
+    naming a document with no member here are handled by the `attested`
+    verification tier (see RequirementRule) instead of by adding a member.
     """
     POLICY_SCHEDULE = "policy_schedule"
     PREMIUM_RECEIPT = "premium_receipt"
@@ -159,6 +165,16 @@ class DocumentKind(str, Enum):
     MENU_OR_PRICE_LIST = "menu_or_price_list"
     MARKETING_OR_OTHER_COMMERCIAL = "marketing_or_other_commercial"
     DAMAGE_PHOTOGRAPH = "damage_photograph"
+    # Added for LOR requirement matching. Each of these MUST also be described
+    # in DOC_TRIAGE_SYSTEM_PROMPT or the model will never emit it.
+    FIR_REPORT = "fir_report"
+    FIRE_BRIGADE_REPORT = "fire_brigade_report"
+    REPAIR_ESTIMATE = "repair_estimate"
+    REPAIR_BILL = "repair_bill"
+    BANK_PROOF = "bank_proof"
+    MEDICAL_CERTIFICATE = "medical_certificate"
+    DRIVING_LICENCE = "driving_licence"
+    VEHICLE_RC = "vehicle_rc"
     UNREADABLE = "unreadable"
     UNKNOWN = "unknown"
 
@@ -196,6 +212,10 @@ class DocumentRecord(BaseModel):
     document_id: str
     document_type: str  # the slot the CLIENT claimed — an assertion, not a fact
     file_ref: str
+    # Set when the user uploaded this file against a specific LOR checklist row.
+    # This is the ONLY thing that can satisfy an `attested` requirement — we make
+    # no claim about what such a file is, only that it was supplied for that row.
+    requirement_id: Optional[str] = None
     uploaded_at: datetime  # when the file was submitted to us (always post-loss)
     # The date on the document itself (e.g. the invoice/purchase date). This —
     # not uploaded_at — is what chronology checks should compare to the event
@@ -290,3 +310,175 @@ class DraftOutput(BaseModel):
 class QCGuardOutput(BaseModel):
     pass_qc: bool
     flags: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# Letter of Requirement (LOR)
+#
+# A client onboards with an EXHAUSTIVE master LOR covering every class of
+# business they write. These shapes hold that list after ingestion, and the
+# narrowed, per-claim result we hand back to the claimant.
+# --------------------------------------------------------------------------
+
+
+class RequirementSeverity(str, Enum):
+    BLOCKING = "blocking"    # the claim cannot proceed until this is supplied
+    ADVISORY = "advisory"    # listed on the checklist; never halts the pipeline
+
+
+class RequirementVerification(str, Enum):
+    """How we decide a requirement has been met.
+
+    CLASSIFIED — triage independently identified an uploaded file as one of the
+    kinds in `accepts`. We are asserting what the document IS.
+    ATTESTED   — the claimant uploaded a file against this checklist row. We
+    assert only that something was supplied for it, never what it is. This is
+    how the long tail of an exhaustive master LOR (letters of subrogation,
+    indemnity bonds, consent-to-deduct forms) reaches the claimant without
+    inflating DocumentKind or claiming a verification we did not perform.
+    """
+    CLASSIFIED = "classified"
+    ATTESTED = "attested"
+
+
+class RequirementStatus(str, Enum):
+    SATISFIED = "satisfied"
+    UNVERIFIED = "unverified"  # something arrived for it but we couldn't read it
+    MISSING = "missing"
+
+
+class RequirementCondition(BaseModel):
+    """Stage-2 narrowing. AND across fields, OR within a field's list.
+
+    An empty condition means the rule applies to every claim of its claim type.
+    NOTE: no amount-based key — this is evaluated before valuation runs. See the
+    module docstring of requirements.py.
+    """
+    categories: list[str] = Field(default_factory=list)
+    item_types: list[str] = Field(default_factory=list)
+    account_types: list[str] = Field(default_factory=list)
+
+
+class ClaimTypeSection(BaseModel):
+    """One section of the master LOR, e.g. "Fire & Allied Perils".
+
+    `description` and `aliases` exist to be shown to the claim-type classifier —
+    they carry the domain mapping (in Indian general insurance flood is a
+    sub-peril of Fire & Allied Perils) that a bare label would not.
+    """
+    id: str
+    label: str
+    description: str = ""
+    aliases: list[str] = Field(default_factory=list)
+
+
+class RequirementRule(BaseModel):
+    requirement_id: str
+    label: str
+    help_text: str = ""
+    # Stage-1 narrowing. EMPTY means universal: applies to every claim regardless
+    # of claim type. Universal rules are what the instant rev.1 LOR is built from.
+    claim_types: list[str] = Field(default_factory=list)
+    verification: RequirementVerification = RequirementVerification.ATTESTED
+    # Any ONE of these kinds satisfies the rule. Must be empty when ATTESTED.
+    accepts: list[DocumentKind] = Field(default_factory=list)
+    severity: RequirementSeverity = RequirementSeverity.ADVISORY
+    applies_when: RequirementCondition = Field(default_factory=RequirementCondition)
+
+
+class RequirementRuleSet(BaseModel):
+    ruleset_id: str
+    version: str = ""
+    source: str = ""
+    claim_types: list[ClaimTypeSection] = Field(default_factory=list)
+    rules: list[RequirementRule] = Field(default_factory=list)
+
+
+class RequirementResult(BaseModel):
+    """One row of the claimant's checklist."""
+    requirement_id: str
+    label: str
+    help_text: str = ""
+    status: RequirementStatus
+    severity: RequirementSeverity
+    verification: RequirementVerification
+    # Human-readable, claimant-facing. Never phrased as "you failed to send X"
+    # when the truth is we could not read what they did send.
+    message: str = ""
+    satisfied_by: list[str] = Field(default_factory=list)  # document_ids
+
+
+class LORPack(BaseModel):
+    """The Letter of Requirement handed back to the claimant.
+
+    Revisions: 1 is the instant pack computed at submit from universal rules and
+    claimed document roles only; 2+ are computed inside the graph once documents
+    have been triaged and the claim type inferred, and after every re-upload.
+    """
+    revision: int = 1
+    basis: str = "universal_only"  # "universal_only" | "claim_type_narrowed"
+    claim_type: Optional[str] = None
+    claim_type_label: Optional[str] = None
+    claim_type_confidence: Optional[float] = None
+    # True when the classifier could not settle on one section, so this pack is
+    # the UNION of the candidates with non-universal rules demoted to advisory.
+    claim_type_ambiguous: bool = False
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ruleset_id: str = ""
+    ruleset_version: str = ""
+    satisfied: list[RequirementResult] = Field(default_factory=list)
+    unverified: list[RequirementResult] = Field(default_factory=list)
+    missing: list[RequirementResult] = Field(default_factory=list)
+    # requirement_ids that halt the pipeline: MISSING and BLOCKING. Never
+    # includes UNVERIFIED — we do not block a claimant over an unreadable scan.
+    blocking_missing: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ClaimTypeAlternate(BaseModel):
+    claim_type_id: str
+    confidence: float = Field(default=0.0, ge=0, le=1)
+
+
+class ClaimTypeClassification(BaseModel):
+    """The classifier's answer, constrained to the ruleset's own section ids."""
+    claim_type_id: str
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    rationale: str = ""
+    alternates: list[ClaimTypeAlternate] = Field(default_factory=list)
+
+
+# --- master-LOR ingestion (onboarding only, never at claim time) ---
+
+class LLMClaimTypeSection(BaseModel):
+    id: str
+    label: str
+    description: str = ""
+    aliases: list[str] = Field(default_factory=list)
+
+
+class ClaimTypeSectionsOutput(BaseModel):
+    claim_types: list[LLMClaimTypeSection]
+
+
+class LLMRequirement(BaseModel):
+    """One requirement as read off the master LOR.
+
+    NOTE: the model names the document in the insurer's own words via
+    `document_name`; it never picks the verification tier or the DocumentKind.
+    Python maps `document_name` onto the enum afterwards, exactly as
+    _triage_verdict keeps the verdict out of the model's hands.
+    """
+    requirement_id: str
+    label: str
+    document_name: str = ""
+    help_text: str = ""
+    claim_types: list[str] = Field(default_factory=list)
+    severity: RequirementSeverity = RequirementSeverity.ADVISORY
+    categories: list[str] = Field(default_factory=list)
+    item_types: list[str] = Field(default_factory=list)
+    account_types: list[str] = Field(default_factory=list)
+
+
+class RequirementsOutput(BaseModel):
+    requirements: list[LLMRequirement]

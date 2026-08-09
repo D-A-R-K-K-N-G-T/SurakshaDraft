@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 import '../config.dart';
 import '../models/claim_model.dart';
+import '../models/lor_model.dart';
 
 /// Returns a usable filesystem path for a picked file. On Android the picker
 /// often returns a null `path` (content:// URI) while still giving us `bytes`;
@@ -254,6 +255,7 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
 
     String? backendClaimId;
     String? submitError;
+    LorPack? provisionalLor;
 
     try {
       final request = http.MultipartRequest('POST', Uri.parse(endpoint));
@@ -261,6 +263,9 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
       request.fields['description'] = 'Claim for ${_itemNameController.text.trim()} ($_selectedItemType)';
       request.fields['event_date'] = _lossDate.toIso8601String();
       request.fields['categories'] = _selectedItemType;
+      // The raw app label, kept alongside `categories` (which the gateway maps
+      // to a pipeline category). The requirement rules match on this label.
+      request.fields['item_type'] = _selectedItemType;
       // Real capture metadata so the backend doesn't fall back to upload-time /
       // placeholder geo (which fails the loss-window and geofence checks).
       if (widget.photoCapturedAt != null) {
@@ -318,6 +323,9 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
         final jsonResponse = jsonDecode(responseData);
         if (jsonResponse['success'] == true && jsonResponse['data'] != null) {
           backendClaimId = jsonResponse['data']['claim_id'] as String?;
+          // Revision 1 of the checklist, computed synchronously by the pipeline
+          // so the user sees it now rather than after the full analysis.
+          provisionalLor = LorPack.tryFrom(jsonResponse['data']['lor']);
         }
       } else if (response.statusCode == 400) {
         // Gateway rejected the submission (e.g. required documents missing).
@@ -372,6 +380,7 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
       gstinNumber: _selectedCategory == 'Commercial'
           ? _gstinController.text.trim()
           : null,
+      lor: provisionalLor,
       status: ClaimStatus.pending,
     );
 

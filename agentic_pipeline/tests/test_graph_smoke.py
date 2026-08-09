@@ -26,9 +26,10 @@ from agentic_pipeline.schemas import (
     PolicyOutput, LLMPolicyItem,
     ReconciliationOutput,
     DraftOutput, QCGuardOutput,
-    PolicyStatus,
+    PolicyStatus, ClaimTypeClassification,
 )
 from agentic_pipeline.state import ClaimState
+from agentic_pipeline.config import settings
 
 
 class MockLLM:
@@ -80,6 +81,9 @@ class MockLLM:
             )
         if self.schema == QCGuardOutput:
             return QCGuardOutput(pass_qc=True, flags=[])
+        if self.schema == ClaimTypeClassification:
+            return ClaimTypeClassification(claim_type_id="fire", confidence=0.95,
+                                           rationale="Flood damage to stock.")
         raise AssertionError(f"Unexpected schema in MockLLM: {self.schema}")
 
 
@@ -118,6 +122,11 @@ def scenario_state(tmp_path):
 
 def test_graph_smoke(monkeypatch, scenario_state):
     monkeypatch.setattr(g, "get_structured_llm", lambda schema, **kwargs: MockLLM(schema))
+    # This scenario deliberately carries only an invoice — no ID, no policy
+    # schedule — so the LOR gate upstream would legitimately pause it. That gate
+    # has its own coverage in test_claim_type.py; here we want the assessment
+    # path that runs AFTER it, so the gate is put in warn_only for this test.
+    monkeypatch.setattr(settings, "lor_gate_mode", "warn_only")
 
     result = graph.invoke(scenario_state.model_dump())
 
