@@ -49,7 +49,26 @@ def test_intake_node_expired_date():
     res = intake_node(state)
     assert res["intake_ok"] is False
 
-def test_intake_node_no_receipt():
+def test_intake_node_null_event_date():
+    # A JSON null event_date used to raise AttributeError (None.replace) and kill
+    # the run; now it must fail intake cleanly with a reason.
+    state = ClaimState(
+        policy={"start_date": "2025-01-01T00:00:00Z", "end_date": "2025-12-31T23:59:59Z"},
+        event={"event_date": None},
+        documents=[
+            DocumentRecord(document_id="DOC-1", document_type="PremiumReceipt",
+                           file_ref="path", uploaded_at=datetime.now(timezone.utc))
+        ],
+    )
+    res = intake_node(state)
+    assert res["intake_ok"] is False
+    assert any("Event date" in r for r in res["intake_reasons"])
+
+
+def test_intake_node_no_receipt_is_not_a_gate():
+    # The old "no premium receipt" gate was a control in name only — the gateway
+    # fabricated a receipt for every claim. It has been removed: a missing
+    # receipt no longer fails intake (a warning is emitted instead).
     state = ClaimState(
         policy={
             "start_date": "2025-01-01T00:00:00Z",
@@ -61,7 +80,39 @@ def test_intake_node_no_receipt():
         documents=[]
     )
     res = intake_node(state)
+    assert res["intake_ok"] is True
+    assert any("Premium payment" in w for w in res["warnings"])
+
+
+def test_intake_merges_gate_reasons():
+    # Blocking findings from document_triage and the gateway must flow into the
+    # intake decision and its reasons.
+    state = ClaimState(
+        policy={"start_date": "2025-01-01T00:00:00Z", "end_date": "2025-12-31T23:59:59Z"},
+        event={"event_date": "2025-06-01T12:00:00Z"},
+        documents=[],
+        doc_gate_reasons=["The file uploaded as your policy schedule appears to be a menu."],
+        gateway_blocking_reasons=["The same file was uploaded for more than one document."],
+    )
+    res = intake_node(state)
     assert res["intake_ok"] is False
+    assert any("menu" in r for r in res["intake_reasons"])
+    assert any("same file" in r for r in res["intake_reasons"])
+
+
+def test_intake_boundary_date_is_warning_not_rejection():
+    # 12 hours after end_date, within the 1-day tolerance -> warn, still ok.
+    state = ClaimState(
+        policy={"start_date": "2025-01-01T00:00:00Z", "end_date": "2025-12-31T23:59:59Z"},
+        event={"event_date": "2026-01-01T11:00:00Z"},
+        documents=[],
+    )
+    res = intake_node(state)
+    assert res["intake_ok"] is True
+    assert any("boundary" in w for w in res["warnings"])
+    # 3 days out -> still rejected.
+    state.event = {"event_date": "2026-01-03T12:00:00Z"}
+    assert intake_node(state)["intake_ok"] is False
 
 def test_evidence_verify_node():
     # Setup a dummy file

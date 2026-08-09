@@ -27,11 +27,18 @@ def resolve_file_ref(ref: str) -> bytes:
 
 
 def load_image_as_data_url(file_ref: str) -> str:
+    """Load a file into a base64 data URL.
+
+    Despite the name this is not image-only: the mime type is derived from the
+    extension, so PDFs (policy schedules, invoices) become
+    `data:application/pdf;base64,...`, which Gemini accepts through the same
+    content block as images (verified against the live API).
+    """
     local_path = file_ref.replace("file://", "", 1) if file_ref.startswith("file://") else file_ref
     path = Path(local_path)
     mime_type, _ = mimetypes.guess_type(path.name)
     mime_type = mime_type or "image/jpeg"
-    
+
     b_data = resolve_file_ref(file_ref)
     b64 = base64.b64encode(b_data).decode("utf-8")
     return f"data:{mime_type};base64,{b64}"

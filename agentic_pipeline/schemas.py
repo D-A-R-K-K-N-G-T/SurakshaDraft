@@ -102,6 +102,8 @@ class VisionCandidateItem(BaseModel):
     name: str
     description: str = ""
     category: str = ""
+    quantity: float = 1  # count of identical items in this group (default 1)
+    serial_number: Optional[str] = None  # visible serial/model plate, if any
     vision_confidence: float = Field(ge=0, le=1)
     evidence_refs: list[str] = Field(default_factory=list)
 
@@ -141,12 +143,105 @@ class PendingVerificationItem(BaseModel):
     supporting_documents: list[str] = Field(default_factory=list)
 
 
+class DocumentKind(str, Enum):
+    """What a document ACTUALLY is, as judged from its contents.
+
+    Deliberately a closed set: the triage model picks one of these, so no
+    injected text inside an uploaded file can smuggle in a novel verdict value.
+    UNREADABLE and UNKNOWN are the model's explicit "I cannot tell" answers and
+    never block a claim.
+    """
+    POLICY_SCHEDULE = "policy_schedule"
+    PREMIUM_RECEIPT = "premium_receipt"
+    GOVT_ID = "govt_id"
+    TAX_INVOICE = "tax_invoice"
+    STOCK_REGISTER = "stock_register"
+    MENU_OR_PRICE_LIST = "menu_or_price_list"
+    MARKETING_OR_OTHER_COMMERCIAL = "marketing_or_other_commercial"
+    DAMAGE_PHOTOGRAPH = "damage_photograph"
+    UNREADABLE = "unreadable"
+    UNKNOWN = "unknown"
+
+
+class TriageVerdict(str, Enum):
+    MATCH = "match"            # contents agree with the slot it was uploaded into
+    UNVERIFIED = "unverified"  # could not confirm either way — never blocks
+    MISMATCH = "mismatch"      # positively identified as a different document class
+
+
+class LLMDocumentTriage(BaseModel):
+    """One document's classification. NOTE: the model is never told which slot
+    the claimant uploaded this into — it answers the open question "what is
+    this?", and the comparison happens afterwards in Python."""
+    document_id: str
+    doc_kind: DocumentKind
+    legible: bool = True
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    # Verbatim strings actually read off the page that justify doc_kind. A
+    # classification with no cited evidence is not allowed to block a claim.
+    markers: list[str] = Field(default_factory=list)
+    # Independent factual signals used to rescue a would-be rejection: a real
+    # policy in any language carries insurance anchors even if the model
+    # mislabels its kind.
+    has_insurance_anchors: bool = False
+    has_identity_anchors: bool = False
+    observed_summary: str = ""
+
+
+class DocumentTriageOutput(BaseModel):
+    documents: list[LLMDocumentTriage]
+
+
 class DocumentRecord(BaseModel):
     document_id: str
-    document_type: str
+    document_type: str  # the slot the CLIENT claimed — an assertion, not a fact
     file_ref: str
-    uploaded_at: datetime
+    uploaded_at: datetime  # when the file was submitted to us (always post-loss)
+    # The date on the document itself (e.g. the invoice/purchase date). This —
+    # not uploaded_at — is what chronology checks should compare to the event
+    # date. None when unknown (e.g. not yet OCR'd / not user-entered).
+    invoice_date: Optional[datetime] = None
+    # Fields filled by document_extract_node (OCR of invoice images). None until
+    # extracted. The valuation agent reads these instead of the raw file.
     extracted_quantity: Optional[float] = None
+    extracted_unit_value: Optional[float] = None
+    extracted_description: Optional[str] = None
+    extraction_done: bool = False
+    # Filled by document_triage_node.
+    classification_kind: Optional[DocumentKind] = None
+    classification_verdict: Optional[TriageVerdict] = None
+    classification_confidence: Optional[float] = None
+    classification_legible: Optional[bool] = None
+    classification_markers: list[str] = Field(default_factory=list)
+    classification_done: bool = False
+
+
+class LLMSumInsured(BaseModel):
+    category: str          # as written on the schedule, e.g. "Plant & Machinery"
+    amount: float
+
+class PolicyExtractionOutput(BaseModel):
+    """Terms read off the insured's actual policy schedule document."""
+    policy_number: Optional[str] = None
+    insurer: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    excess: Optional[float] = None
+    sums_insured: list[LLMSumInsured] = Field(default_factory=list)
+    # Verbatim clause sentences — coverage AND exclusions. The policy agent
+    # quotes from these, and _clause_is_grounded checks citations against them.
+    clauses: list[str] = Field(default_factory=list)
+
+
+class LLMDocumentExtraction(BaseModel):
+    document_id: str  # echo back unchanged — the join key
+    unit_value: Optional[float] = None
+    quantity: Optional[float] = None
+    description: Optional[str] = None
+    invoice_date: Optional[datetime] = None
+
+class DocumentExtractionOutput(BaseModel):
+    documents: list[LLMDocumentExtraction]
 
 
 class LLMValuationItem(BaseModel):
@@ -188,6 +283,7 @@ class DraftOutput(BaseModel):
     main_schedule: str
     rejected_items_annexure: str
     pending_verification_annexure: str
+    excluded_items_annexure: str = ""  # items the policy excludes (not the same as rejected)
     narrative: Optional[str] = None
 
 

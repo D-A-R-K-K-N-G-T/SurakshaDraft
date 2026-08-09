@@ -31,11 +31,15 @@ class ClaimSubmitResponse(BaseModel):
     claim_id: str
     status: str
 
+class VisionPreviewResponse(BaseModel):
+    items: List[VisionCandidateItem]
+    anomalies: List[str] = Field(default_factory=list)
+
 # In-memory store
 _CLAIMS_DB: dict[str, dict] = {}
 
 
-@app.post("/api/v1/vision/preview", response_model=VisionCandidateItem)
+@app.post("/api/v1/vision/preview", response_model=VisionPreviewResponse)
 def vision_preview(req: VisionPreviewRequest):
     # Construct content explicitly for this single image
     categories = req.declared_asset_categories or ["Stock", "Furniture, Fixtures & Fittings", "Plant & Machinery"]
@@ -64,19 +68,15 @@ def vision_preview(req: VisionPreviewRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
-    if result.anomalies and not result.items:
-        raise HTTPException(status_code=422, detail={"anomalies": result.anomalies})
-        
     if not result.items:
-        raise HTTPException(status_code=422, detail="No items identified in the image.")
-        
-    if len(result.items) > 1:
-        print("WARNING: /api/v1/vision/preview returned multiple items, taking the first.")
-        
-    # Exclude evidence_refs as it's not applicable for preview
-    item = result.items[0]
-    item.evidence_refs = []
-    return item
+        # No items — surface anomalies so the client can show why.
+        raise HTTPException(status_code=422, detail={"anomalies": result.anomalies})
+
+    # Return ALL identified items for the user to confirm/edit. evidence_refs is
+    # not meaningful at preview time (evidence ids are assigned at submit).
+    for item in result.items:
+        item.evidence_refs = []
+    return VisionPreviewResponse(items=result.items, anomalies=result.anomalies)
 
 
 def _run_claim_pipeline(claim_id: str, state: ClaimState):
@@ -84,7 +84,16 @@ def _run_claim_pipeline(claim_id: str, state: ClaimState):
         final_state = graph.invoke(state.model_dump())
         _CLAIMS_DB[claim_id] = {"status": "completed", "state": final_state}
     except Exception as e:
-        _CLAIMS_DB[claim_id] = {"status": "failed", "error": str(e)}
+        import logging
+        import traceback
+        logging.getLogger("agentic_pipeline.service").exception(
+            "Claim pipeline failed for %s", claim_id
+        )
+        _CLAIMS_DB[claim_id] = {
+            "status": "failed",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
 
 
 @app.post("/api/v1/claim/submit", response_model=ClaimSubmitResponse)

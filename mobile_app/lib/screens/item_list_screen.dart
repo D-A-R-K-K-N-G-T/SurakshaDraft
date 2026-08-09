@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter_markdown/flutter_markdown.dart';
+import '../config.dart';
 import '../models/claim_model.dart';
 import 'upload_policy_screen.dart';
 
@@ -116,6 +117,163 @@ class _ItemListScreenState extends State<ItemListScreen> {
     }
   }
 
+  /// Derives a human status from the pipeline's final state instead of showing
+  /// a hardcoded "COVERED" badge. Returns one of: COVERED, NEEDS REVIEW,
+  /// NOT COVERED, NO ITEMS.
+  String _summarizePolicyStatus(Map<String, dynamic> state) {
+    // A hard intake rejection (menu-as-policy, swapped files, out-of-period
+    // loss) leaves line_items and rejected_items empty, which would otherwise
+    // fall through to a benign-looking "NO ITEMS". Catch it first.
+    if (state['intake_ok'] == false) return 'REJECTED';
+    final lineItems = (state['line_items'] as List?) ?? [];
+    final rejected = (state['rejected_items'] as List?) ?? [];
+    int covered = 0, review = 0, excluded = 0;
+    for (final item in lineItems) {
+      final status = (item is Map) ? item['policy_status'] : null;
+      if (status == 'covered') covered++;
+      if (status == 'review') review++;
+      if (status == 'excluded') excluded++;
+    }
+    // Anything needing a human eye (a covered item alongside excluded/rejected
+    // ones, or an explicit review) is "NEEDS REVIEW".
+    if (review > 0) return 'NEEDS REVIEW';
+    if (covered > 0 && (excluded > 0 || rejected.isNotEmpty)) return 'NEEDS REVIEW';
+    if (covered > 0) return 'COVERED';
+    // No covered items, but there ARE excluded/rejected ones -> not covered.
+    if (excluded > 0 || rejected.isNotEmpty) return 'NOT COVERED';
+    return 'NO ITEMS';
+  }
+
+  Widget _buildStatusBadge(String? statusText) {
+    final status = (statusText ?? '').toUpperCase();
+    Color bg, border, fg, sub;
+    IconData icon;
+    String title, subtitle;
+
+    // Order matters: REJECTED and NOT COVERED both need to precede COVERED
+    // (which they'd substring-match).
+    if (status.contains('REJECTED')) {
+      bg = const Color(0xFFFEF2F2);
+      border = const Color(0xFFEF4444);
+      fg = const Color(0xFF991B1B);
+      sub = const Color(0xFFB91C1C);
+      icon = Icons.block;
+      title = 'CLAIM NOT ACCEPTED';
+      subtitle = 'Your documents could not be verified — see below.';
+    } else if (status.contains('NOT COVERED')) {
+      bg = const Color(0xFFFEF2F2);
+      border = const Color(0xFFEF4444);
+      fg = const Color(0xFF991B1B);
+      sub = const Color(0xFFB91C1C);
+      icon = Icons.cancel_outlined;
+      title = 'Policy Status: NOT COVERED';
+      subtitle = 'No items were covered — see the excluded / rejected annexures below.';
+    } else if (status.contains('REVIEW')) {
+      bg = const Color(0xFFFFFBEB);
+      border = const Color(0xFFF59E0B);
+      fg = const Color(0xFF92400E);
+      sub = const Color(0xFFB45309);
+      icon = Icons.warning_amber_rounded;
+      title = 'Policy Status: NEEDS REVIEW';
+      subtitle = 'Some items need manual review, are excluded, or were rejected.';
+    } else if (status.contains('COVERED')) {
+      bg = const Color(0xFFECFDF5);
+      border = const Color(0xFF10B981);
+      fg = const Color(0xFF065F46);
+      sub = const Color(0xFF047857);
+      icon = Icons.check_circle;
+      title = 'Policy Status: COVERED';
+      subtitle = 'All identified items are covered under the policy.';
+    } else if (status.contains('ERROR')) {
+      bg = const Color(0xFFFEF2F2);
+      border = const Color(0xFFEF4444);
+      fg = const Color(0xFF991B1B);
+      sub = const Color(0xFFB91C1C);
+      icon = Icons.error_outline;
+      title = 'Processing Error';
+      subtitle = 'The AI pipeline could not complete this claim.';
+    } else {
+      bg = const Color(0xFFF1F5F9);
+      border = const Color(0xFF94A3B8);
+      fg = const Color(0xFF334155);
+      sub = const Color(0xFF64748B);
+      icon = Icons.info_outline;
+      title = 'Policy Status: NO ITEMS';
+      subtitle = 'No claimable items were identified in the photo.';
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: border, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: fg),
+                ),
+                Text(subtitle, style: TextStyle(fontSize: 12, color: sub)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Renders every annexure so no item can silently vanish. An item the policy
+  /// EXCLUDES is not "rejected" and is not in the main schedule — it lives in
+  /// its own excluded annexure, which must be shown to avoid false negatives.
+  String _buildDraftSummary(Map draftPack, Map state) {
+    String section(String title, dynamic body) {
+      final text = (body == null || body.toString().trim().isEmpty) ? 'None.' : body.toString().trim();
+      return '### $title\n$text';
+    }
+
+    // Hard rejection path: lead with WHY, and what each uploaded file looked
+    // like. The reason strings are already user-facing sentences.
+    if (state['intake_ok'] == false) {
+      final parts = <String>['CLAIM NOT ACCEPTED'];
+      final reasons = (state['intake_reasons'] as List?) ?? [];
+      if (reasons.isNotEmpty) {
+        parts.add('### Why this claim was not accepted\n${reasons.map((r) => '- $r').join('\n')}');
+      }
+      final docs = (state['documents'] as List?) ?? [];
+      final mismatched = docs.where((d) => d is Map && d['classification_verdict'] == 'mismatch').toList();
+      if (mismatched.isNotEmpty) {
+        parts.add('### Documents that did not match\n${mismatched.map((d) {
+          final kind = (d['classification_kind'] ?? 'unidentified').toString().replaceAll('_', ' ');
+          return '- ${d['document_type']}: looks like $kind';
+        }).join('\n')}');
+      }
+      return parts.join('\n\n');
+    }
+
+    final parts = <String>[
+      'DRAFT PACK GENERATED:',
+      section('Main Schedule (Covered / Under Review)', draftPack['main_schedule']),
+      section('Excluded by Policy', draftPack['excluded_items_annexure']),
+      section('Rejected Items', draftPack['rejected_items_annexure']),
+      section('Pending Verification', draftPack['pending_verification_annexure']),
+    ];
+
+    final warnings = (state['warnings'] as List?) ?? [];
+    if (warnings.isNotEmpty) {
+      parts.add('### Warnings\n${warnings.map((w) => '- $w').join('\n')}');
+    }
+    return parts.join('\n\n');
+  }
+
   Future<void> _pollClaimStatus(String claimId) async {
     const int maxAttempts = 40;
     int attempts = 0;
@@ -125,19 +283,21 @@ class _ItemListScreenState extends State<ItemListScreen> {
       if (!mounted) return;
 
       try {
-        final response = await http.get(Uri.parse('http://10.0.2.2:3000/api/claim/$claimId'));
+        final response = await http.get(Uri.parse('$kApiBase/api/claim/$claimId'));
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           if (data['status'] == 'completed') {
-            final draftPack = data['state']['draft_pack'];
+            final state = data['state'] ?? {};
+            final draftPack = state['draft_pack'] ?? {};
+            final statusText = _summarizePolicyStatus(state);
             final index = _claims.indexWhere((c) => c.id == claimId);
             if (index != -1 && _claims[index].status == ClaimStatus.pending) {
               setState(() {
                 _claims[index] = _claims[index].copyWith(
                   status: ClaimStatus.review,
-                  draftPackSummary: 'DRAFT PACK GENERATED:\n\n### Main Schedule\n${draftPack['main_schedule']}\n\n### Rejected Items\n${draftPack['rejected_items_annexure']}',
+                  draftPackSummary: _buildDraftSummary(draftPack, state),
                   aiReasoning: 'AI completed analysis and generated the draft pack.',
-                  policyStatusText: 'Status updated by AI',
+                  policyStatusText: statusText,
                 );
               });
               ScaffoldMessenger.of(context).showSnackBar(
@@ -268,41 +428,8 @@ class _ItemListScreenState extends State<ItemListScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Coverage Status Badge
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF10B981)),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Color(0xFF059669), size: 22),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Policy Status: COVERED',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                              color: Color(0xFF065F46),
-                            ),
-                          ),
-                          Text(
-                            'Confirmed covered under active insurance policy schedule.',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF047857)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              // Coverage Status Badge — driven by the pipeline's actual result.
+              _buildStatusBadge(claim.policyStatusText),
               const SizedBox(height: 16),
 
               // Draft Pack Generated Markdown Box

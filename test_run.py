@@ -3,7 +3,8 @@ import uuid
 import os
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join("agentic_pipeline", ".env"))
+# .env lives at the repo root (next to this file), not inside agentic_pipeline/.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 from agentic_pipeline.graph import graph
 
@@ -85,7 +86,9 @@ def run_test():
 
         
     except Exception as e:
+        import traceback
         print(f"\nExecution Failed: {e}")
+        print(traceback.format_exc())
 
 if __name__ == "__main__":
     run_test()

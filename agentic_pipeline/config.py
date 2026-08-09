@@ -32,5 +32,32 @@ class Settings(BaseSettings):
     flood_window_hours_before: int = 6
     flood_window_hours_after: int = 240
 
+    # --- document triage gate ---
+    # "enforce": a positively-identified wrong document fails intake.
+    # "warn_only": the same finding is recorded as a warning and the claim
+    # proceeds. Flip to warn_only (no code change) if real claims start getting
+    # blocked; the coverage cap below is an independent safety net either way.
+    doc_gate_mode: str = "enforce"
+    # Minimum self-reported confidence before a wrong-document finding may block.
+    doc_triage_mismatch_confidence: float = 0.80
+    # Loss dates this close to a policy boundary get a warning, not a rejection.
+    policy_period_boundary_tolerance_days: int = 1
+
 
 settings = Settings()
+
+
+# Flat depreciation rate applied per category when the valuation agent prices an
+# item (net_loss = purchase_value * (1 - rate)). Keyed on the lowercased pipeline
+# category; DEPRECIATION_DEFAULT is used for anything unmatched. These are
+# placeholder rates — replace with the insurer's actual depreciation schedule.
+DEPRECIATION_DEFAULT = 0.10
+DEPRECIATION_BY_CATEGORY = {
+    "stock": 0.0,                              # trading stock is not depreciated
+    "furniture, fixtures & fittings": 0.10,
+    "plant & machinery": 0.15,
+    "electronics": 0.25,
+    "vehicle": 0.15,
+    "valuables": 0.0,
+    "property": 0.05,
+}

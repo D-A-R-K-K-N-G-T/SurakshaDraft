@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
-import 'claim_form_screen.dart';
+import 'preview_confirm_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   final String? policyPdfName;
@@ -133,16 +133,21 @@ class _CameraScreenState extends State<CameraScreen> {
 
       if (!mounted) return;
 
-      // Direct transition to Step 3: Claim Form (NO AI verification!)
+      // Transition to the preview/confirm step (AI proposes items to confirm),
+      // which then continues to the claim form.
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ClaimFormScreen(
+          builder: (_) => PreviewConfirmScreen(
             policyPdfName: widget.policyPdfName,
             policyPdfPath: widget.policyPdfPath,
             photoPath: photo!.path,
             geotag: latLngString,
             timestamp: formattedTimestamp,
+            // Raw values for the backend (the display strings above are for UI).
+            photoLat: currentPosition.latitude,
+            photoLon: currentPosition.longitude,
+            photoCapturedAt: now.toUtc().toIso8601String(),
             userCategory: widget.userCategory,
           ),
         ),

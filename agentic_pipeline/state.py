@@ -29,13 +29,28 @@ class ClaimState(BaseModel):
     policy: dict
     event: dict
 
-    documents: Annotated[list[DocumentRecord], operator.add] = []
+    # Last-write-wins: document_extract_node rewrites the whole list with OCR
+    # fields filled in. (Was operator.add, but nothing appends documents, and an
+    # additive channel would duplicate the list when the extract node returns it.)
+    documents: list[DocumentRecord] = []
     evidence: list[EvidenceRecord] = []
     line_items: list[LineItem] = []
     rejected_items: Annotated[list[RejectedItem], operator.add] = []
     pending_verification: Annotated[list[PendingVerificationItem], operator.add] = []
     warnings: Annotated[list[str], operator.add] = []
     intake_ok: bool = False
+    intake_reasons: list[str] = []
+
+    # Blocking findings from document_triage_node (a file positively identified
+    # as a different document class than the slot it was uploaded into).
+    # Last-write-wins: only the triage node writes it, and intake merges it.
+    doc_gate_reasons: list[str] = []
+    # Deterministic blocking findings computed by the gateway before the
+    # pipeline ran (e.g. the same file uploaded under two different roles).
+    gateway_blocking_reasons: list[str] = []
+    # Honest description of what the ID check established. Never implies a
+    # named-claimant KYC match — the app collects no claimant name.
+    kyc_status: Optional[str] = None
 
     # free-text notes from any node that spots something off but isn't
     # itself the check that should act on it (added by vision so far)

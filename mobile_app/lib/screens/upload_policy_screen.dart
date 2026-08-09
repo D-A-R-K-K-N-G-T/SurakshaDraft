@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'camera_screen.dart';
+import 'claim_form_screen.dart' show resolvePickedFilePath;
 
 class UploadPolicyScreen extends StatefulWidget {
   final String? userCategory;
@@ -19,21 +20,33 @@ class _UploadPolicyScreenState extends State<UploadPolicyScreen> {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
+        withData: true, // ensure bytes exist if the picker returns no path
       );
 
       if (result != null && result.files.isNotEmpty) {
+        final f = result.files.first;
+        final path = await resolvePickedFilePath(f);
+        if (path == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not read that file. Please pick the policy PDF from local device storage.'),
+            backgroundColor: Colors.amber,
+          ));
+          return;
+        }
         setState(() {
-          _policyFileName = result.files.first.name;
-          _policyFilePath = result.files.first.path;
+          _policyFileName = f.name;
+          _policyFilePath = path;
         });
       }
     } catch (e) {
       if (!mounted) return;
-      // Fallback demo file if file picker runs on web/emulator without storage permissions
-      setState(() {
-        _policyFileName = 'Insurance_Policy_Schedule_2026.pdf';
-        _policyFilePath = '/storage/emulated/0/Download/Policy.pdf';
-      });
+      // Do NOT fabricate a filename/path here. A nonexistent path makes the
+      // upload throw at submit time, so the claim would silently proceed with
+      // NO policy document while the UI claimed one was attached.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not pick the policy PDF: $e')),
+      );
     }
   }
 

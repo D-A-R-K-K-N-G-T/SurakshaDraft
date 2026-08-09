@@ -1,190 +1,261 @@
+"""
+Full-graph smoke test that actually exercises vision + document extraction,
+rather than pre-seeding line_items and skipping vision (which the old version
+did). All LLM calls are mocked; image loads use real temp files so the vision
+and document_extract nodes run their real bodies.
+
+Scenario:
+  - Vision extracts 3 items from one scene photo:
+      LI-1 Cotton sarees (Stock, qty 180)          -> valued, COVERED
+      LI-2 Steam press   (Plant & Machinery, serial SN-RP4471, dup) -> REJECTED (serial)
+      LI-3 Wiring panel  (Electronics)             -> EXCLUDED by policy
+  - One invoice is OCR'd to give the saree unit value.
+Asserts the item lands in the right bucket and depreciation is applied.
+"""
+import hashlib
 import pytest
 from datetime import datetime, timezone
-import json
-import os
-import hashlib
 
 from agentic_pipeline.graph import graph
+import agentic_pipeline.graph as g
 from agentic_pipeline.schemas import (
-    CaptureStage, DocumentRecord, EvidenceRecord, LineItem, 
-    VisionMissingSignal, ValuationOutput, PolicyOutput, 
-    ReconciliationOutput, DraftOutput, QCGuardOutput, ValueSource, PolicyStatus, PendingVerificationItem
+    CaptureStage, DocumentRecord, EvidenceRecord,
+    VisionOutput, VisionCandidateItem,
+    DocumentExtractionOutput, LLMDocumentExtraction,
+    ValuationOutput, LLMValuationItem,
+    PolicyOutput, LLMPolicyItem,
+    ReconciliationOutput,
+    DraftOutput, QCGuardOutput,
+    PolicyStatus,
 )
 from agentic_pipeline.state import ClaimState
 
+
+class MockLLM:
+    def __init__(self, schema):
+        self.schema = schema
+
+    def invoke(self, messages, config=None):
+        if self.schema == VisionOutput:
+            return VisionOutput(items=[
+                VisionCandidateItem(name="Cotton sarees", category="Stock", quantity=180,
+                                    vision_confidence=0.9, evidence_refs=["IMG-001"]),
+                VisionCandidateItem(name="Steam press", category="Plant & Machinery", quantity=1,
+                                    serial_number="SN-RP4471", vision_confidence=0.95, evidence_refs=["IMG-001"]),
+                VisionCandidateItem(name="Wiring panel", category="Electronics", quantity=1,
+                                    vision_confidence=0.8, evidence_refs=["IMG-001"]),
+            ], missing_signals=[], anomalies=[])
+        if self.schema == DocumentExtractionOutput:
+            return DocumentExtractionOutput(documents=[
+                LLMDocumentExtraction(document_id="DOC-INV-1", unit_value=1000.0,
+                                      quantity=180, description="Cotton Sarees"),
+            ])
+        if self.schema == ValuationOutput:
+            # Value only the sarees; the press and panel find no invoice.
+            return ValuationOutput(items=[
+                LLMValuationItem(item_ref="LI-1", unit_value=1000.0, matched_document_ids=["DOC-INV-1"]),
+                LLMValuationItem(item_ref="LI-2", unit_value=None, matched_document_ids=[]),
+                LLMValuationItem(item_ref="LI-3", unit_value=None, matched_document_ids=[]),
+            ])
+        if self.schema == PolicyOutput:
+            return PolicyOutput(items=[
+                LLMPolicyItem(item_ref="LI-1", policy_status=PolicyStatus.COVERED,
+                              policy_clause="Flood damage to stock and machinery is covered."),
+                LLMPolicyItem(item_ref="LI-2", policy_status=PolicyStatus.COVERED,
+                              policy_clause="Flood damage to stock and machinery is covered."),
+                LLMPolicyItem(item_ref="LI-3", policy_status=PolicyStatus.EXCLUDED,
+                              policy_clause="Internal electrical short-circuit is excluded."),
+            ])
+        if self.schema == ReconciliationOutput:
+            return ReconciliationOutput(pending_items=[])
+        if self.schema == DraftOutput:
+            # One ref per section, matching the expected buckets so the
+            # deterministic QC check passes:
+            #   valid (covered/review) = {LI-1}, excluded = {LI-3}, rejected = {LI-2}
+            return DraftOutput(
+                main_schedule="LI-1: Cotton sarees.",
+                excluded_items_annexure="LI-3: Wiring panel — excluded.",
+                rejected_items_annexure="LI-2: Steam press — rejected.",
+                pending_verification_annexure="None",
+            )
+        if self.schema == QCGuardOutput:
+            return QCGuardOutput(pass_qc=True, flags=[])
+        raise AssertionError(f"Unexpected schema in MockLLM: {self.schema}")
+
+
 @pytest.fixture
-def scenario_a_state():
+def scenario_state(tmp_path):
+    photo = tmp_path / "scene.jpg"
+    photo.write_bytes(b"scene-image-bytes")
+    invoice = tmp_path / "invoice.jpg"
+    invoice.write_bytes(b"invoice-image-bytes")
+
+    photo_hash = hashlib.sha256(photo.read_bytes()).hexdigest()
+
     state = ClaimState(
         policy={
-            "product": "Bharat Sookshma Udyam Suraksha",
             "start_date": "2025-01-01T00:00:00Z",
             "end_date": "2025-12-31T23:59:59Z",
-            "sum_insured_stock": 1200000,
-            "excess": 5000,
             "clauses": "Flood damage to stock and machinery is covered. Internal electrical short-circuit is excluded.",
-            "asset_categories": ["Stock", "Furniture, Fixtures & Fittings", "Plant & Machinery"],
-            "premises_geo": {"lat": 10.0, "lon": 10.0}
+            "asset_categories": ["Stock", "Plant & Machinery", "Electronics"],
         },
-        event={
-            "event_date": "2025-12-02T04:30:00Z",
-            "description": "Heavy overnight rainfall caused inundation."
-        },
+        event={"event_date": "2025-12-02T04:30:00Z"},
         evidence=[
             EvidenceRecord(
-                evidence_id="IMG-001",
-                capture_stage=CaptureStage.ITEM,
-                file_ref="dummy1.jpg",
-                sha256="mockhash1",
-                captured_at=datetime.fromisoformat("2025-12-02T10:00:00+00:00"),
-                geotag={"lat": 10.0, "lon": 10.0}
+                evidence_id="IMG-001", capture_stage=CaptureStage.SCENE, file_ref=str(photo),
+                sha256=photo_hash, captured_at=datetime.fromisoformat("2025-12-02T10:00:00+00:00"),
             ),
-            EvidenceRecord(
-                evidence_id="IMG-002",
-                capture_stage=CaptureStage.ITEM,
-                file_ref="dummy2.jpg", 
-                sha256="mockhash2",
-                captured_at=datetime.fromisoformat("2025-12-02T10:05:00+00:00"),
-                geotag={"lat": 10.0, "lon": 10.0}
-            )
         ],
         documents=[
-            DocumentRecord(
-                document_id="DOC-INV-1187",
-                document_type="Invoice",
-                file_ref="INV/2025/1187",
-                uploaded_at=datetime.fromisoformat("2025-11-01T10:00:00+00:00"),
-                extracted_quantity=180.0
-            ),
-            DocumentRecord(
-                document_id="DOC-INV-2201",
-                document_type="Invoice",
-                file_ref="INV/2025/2201",
-                uploaded_at=datetime.fromisoformat("2025-11-05T10:00:00+00:00"),
-                extracted_quantity=1.0
-            ),
-            DocumentRecord(
-                document_id="DOC-REG-001",
-                document_type="PremiumReceipt",
-                file_ref="Receipt",
-                uploaded_at=datetime.fromisoformat("2025-01-02T10:00:00+00:00")
-            ),
-            DocumentRecord(
-                document_id="DOC-REG-002",
-                document_type="Stock Register",
-                file_ref="Stock Register Page 12",
-                uploaded_at=datetime.fromisoformat("2025-12-01T10:00:00+00:00")
-            )
-        ]
+            DocumentRecord(document_id="DOC-INV-1", document_type="Invoice", file_ref=str(invoice),
+                           uploaded_at=datetime.fromisoformat("2025-12-03T10:00:00+00:00")),
+            DocumentRecord(document_id="DOC-REG-001", document_type="PremiumReceipt", file_ref="system",
+                           uploaded_at=datetime.fromisoformat("2025-01-02T10:00:00+00:00")),
+        ],
     )
-
-    state.line_items = [
-        LineItem(
-            item_ref="LI-1",
-            name="Cotton sarees",
-            description="Water-stained",
-            category="Stock",
-            quantity=180,
-            evidence_refs=["IMG-001"]
-        ),
-        LineItem(
-            item_ref="LI-4",
-            name="Steam press machine",
-            description="Steam Press",
-            serial_number="SN-RP4471",
-            category="Plant & Machinery",
-            quantity=1,
-            evidence_refs=["IMG-002"]
-        )
-    ]
-    state.pending_signals = [
-        VisionMissingSignal(
-            item_label_guess="Fabric rolls",
-            location_notes="Empty rack covered in debris",
-            evidence_refs=[]
-        )
-    ]
-    state.vision_processed_evidence_ids = ["IMG-001", "IMG-002"]
-    
     return state
 
-def test_graph_smoke(monkeypatch, scenario_a_state):
-    # Setup dummy files for hash check
-    with open("dummy1.jpg", "wb") as f: f.write(b"1")
-    with open("dummy2.jpg", "wb") as f: f.write(b"2")
-    scenario_a_state.evidence[0].sha256 = hashlib.sha256(b"1").hexdigest()
-    scenario_a_state.evidence[1].sha256 = hashlib.sha256(b"2").hexdigest()
 
-    import agentic_pipeline.graph as g
-    from agentic_pipeline.schemas import LLMValuationItem, LLMPolicyItem, LLMPendingItem
-    
-    class MockLLM:
-        def __init__(self, schema):
-            self.schema = schema
+def test_graph_smoke(monkeypatch, scenario_state):
+    monkeypatch.setattr(g, "get_structured_llm", lambda schema, **kwargs: MockLLM(schema))
+
+    result = graph.invoke(scenario_state.model_dump())
+
+    # Node-written channels come back as Pydantic objects; reserve_estimate and
+    # proof_receipt are plain dicts.
+    line_items = {li.item_ref: li for li in result["line_items"]}
+
+    # LI-1 sarees: valued from the OCR'd invoice, with depreciation applied
+    # (Stock depreciation is 0.0, so net_loss == purchase_value == 180 * 1000).
+    assert "LI-1" in line_items
+    li1 = line_items["LI-1"]
+    assert li1.value_source.value == "invoice_matched"
+    assert li1.quantity == 180
+    assert li1.net_loss == 180 * 1000.0
+    assert li1.policy_status == PolicyStatus.COVERED
+
+    # LI-2 steam press: rejected for the duplicate serial (dup-serial check revived)
+    rejected = {r.item_ref for r in result["rejected_items"]}
+    assert "LI-2" in rejected
+    li2_reasons = next(r for r in result["rejected_items"] if r.item_ref == "LI-2").reasons
+    assert any("Duplicate serial" in reason for reason in li2_reasons)
+
+    # LI-3 wiring panel: EXCLUDED by policy — must survive to line_items (not rejected)
+    assert "LI-3" in line_items
+    assert line_items["LI-3"].policy_status == PolicyStatus.EXCLUDED
+    assert "LI-3" not in rejected
+
+    # Reserve estimate now has an excluded bucket
+    reserve = result["reserve_estimate"]
+    assert reserve["confirmed"] == 180 * 1000.0
+    assert "excluded" in reserve
+
+    # QC passed (draft refs match the buckets), pack shipped with a receipt
+    assert result["qc"].pass_qc is True
+    assert result.get("draft_pack") is not None
+    assert result.get("proof_receipt") is not None
+
+
+def test_policy_extract_overrides_assumed_terms(monkeypatch, tmp_path):
+    """The uploaded schedule is authoritative over gateway-assumed terms."""
+    from agentic_pipeline.schemas import PolicyExtractionOutput, LLMSumInsured
+    from datetime import datetime as _dt
+
+    pdf = tmp_path / "policy.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    class PolicyLLM:
         def invoke(self, messages, config=None):
-            if self.schema == ValuationOutput:
-                out_items = []
-                for i in scenario_a_state.line_items:
-                    unit_val = None
-                    docs = []
-                    if i.item_ref == "LI-1":
-                        unit_val = 1450
-                        docs = ["DOC-INV-1187"]
-                    elif i.item_ref == "LI-4":
-                        unit_val = 34000
-                        docs = ["DOC-INV-2201"]
-                    out_items.append(LLMValuationItem(item_ref=i.item_ref, unit_value=unit_val, matched_document_ids=docs))
-                return ValuationOutput(items=out_items)
-            elif self.schema == PolicyOutput:
-                out_items = []
-                for i in scenario_a_state.line_items:
-                    out_items.append(LLMPolicyItem(item_ref=i.item_ref, policy_status=PolicyStatus.COVERED))
-                return PolicyOutput(items=out_items)
-            elif self.schema == ReconciliationOutput:
-                return ReconciliationOutput(pending_items=[
-                    LLMPendingItem(
-                        item_label="Fabric rolls",
-                        quantity_claimed=28,
-                        unit_value_from_records=3250.0,
-                        supporting_documents=["DOC-REG-002"]
-                    )
-                ])
-            elif self.schema == DraftOutput:
-                return DraftOutput(
-                    main_schedule="Mock schedule",
-                    rejected_items_annexure="Mock rejected",
-                    pending_verification_annexure="Mock pending"
-                )
-            elif self.schema == QCGuardOutput:
-                return QCGuardOutput(pass_qc=True, flags=[])
+            return PolicyExtractionOutput(
+                policy_number="POL-1",
+                start_date=_dt.fromisoformat("2026-04-01T00:00:00+00:00"),
+                end_date=_dt.fromisoformat("2027-03-31T00:00:00+00:00"),
+                excess=5000,
+                sums_insured=[LLMSumInsured(category="Plant & Machinery", amount=800000)],
+                clauses=["Flood damage to stock is covered.", "Loss of cash is excluded."],
+            )
 
-    g.get_structured_llm = lambda schema, **kwargs: MockLLM(schema)
-    
-    result = g.graph.invoke(scenario_a_state.model_dump())
-    
-    # Assert LI-4 ends up in rejected_items with a serial-based reason
-    rejected = result.get("rejected_items", [])
-    li4_rejected = next((r for r in rejected if (r.item_ref if hasattr(r, "item_ref") else r["item_ref"]) == "LI-4"), None)
-    assert li4_rejected is not None
-    reasons = li4_rejected.reasons if hasattr(li4_rejected, "reasons") else li4_rejected["reasons"]
-    assert any("Duplicate serial SN-RP4471" in reason for reason in reasons)
-    
-    # Assert pending_verification contains the fabric-rolls entry
-    pending = result.get("pending_verification", [])
-    assert any("Fabric rolls" in (p.item_label if hasattr(p, "item_label") else p["item_label"]) for p in pending)
-    
-    # Assert draft_pack is non-null
-    draft = result.get("draft_pack")
-    assert draft is not None
-    assert (draft.main_schedule if hasattr(draft, "main_schedule") else draft["main_schedule"]) == "Mock schedule"
-    
-    # Assert proof_receipt has a receipt_hash
-    receipt = result.get("proof_receipt")
-    assert receipt is not None
-    assert "receipt_hash" in receipt
-    
-    # Save to scenario files to fulfill the requirement
-    with open("scenario_A_mixed_case.json", "w") as f:
-        json.dump(scenario_a_state.model_dump(), f, default=str, indent=2)
-        
-    os.remove("dummy1.jpg")
-    os.remove("dummy2.jpg")
+    monkeypatch.setattr(g, "get_structured_llm", lambda schema, **kwargs: PolicyLLM())
+
+    state = ClaimState(
+        # Gateway-assumed values that must be replaced by the document.
+        policy={"start_date": "2025-01-01T00:00:00Z", "end_date": "2026-12-31T23:59:59Z",
+                "clauses": "Flood damage to stock and machinery is covered."},
+        event={},
+        documents=[DocumentRecord(document_id="DOC-POL-1", document_type="PolicyDocument",
+                                  file_ref=str(pdf), uploaded_at=datetime.now(timezone.utc))],
+    )
+    out = g.policy_extract_node(state)
+    p = out["policy"]
+
+    assert p["start_date"].startswith("2026-04-01")
+    assert p["end_date"].startswith("2027-03-31")
+    assert p["excess"] == 5000
+    assert p["sum_insured_machinery"] == 800000
+    assert p["terms_source"] == "policy_document"
+    # Clauses become the verbatim grounding corpus for the coverage agent.
+    assert "Loss of cash is excluded." in p["clauses"]
+
+
+def test_policy_extract_no_document_is_noop(tmp_path):
+    state = ClaimState(policy={"clauses": "assumed"}, event={}, documents=[])
+    assert g.policy_extract_node(state) == {}
+
+
+def test_assumed_clauses_cap_covered_to_review(monkeypatch):
+    """An item can never be COVERED off gateway-assumed generic terms."""
+    from agentic_pipeline.schemas import PolicyOutput, LLMPolicyItem
+    from agentic_pipeline.schemas import LineItem
+
+    class PolicyLLM:
+        def invoke(self, messages, config=None):
+            return PolicyOutput(items=[
+                LLMPolicyItem(item_ref="LI-1", policy_status=PolicyStatus.COVERED,
+                              policy_clause="Flood damage to stock and machinery is covered."),
+            ])
+
+    monkeypatch.setattr(g, "get_structured_llm", lambda schema, **k: PolicyLLM())
+    state = ClaimState(
+        policy={"clauses": "Flood damage to stock and machinery is covered.", "clauses_assumed": True},
+        event={},
+    )
+    state.line_items = [LineItem(item_ref="LI-1", name="Sarees", category="Stock")]
+    out = g.policy_agent_node(state)
+    assert out["line_items"][0].policy_status == PolicyStatus.REVIEW
+    assert any("assumed" in w for w in out.get("warnings", []))
+
+
+def test_real_clauses_still_yield_covered(monkeypatch):
+    """Without the clauses_assumed flag, a covered item stays covered (guards
+    the smoke fixture's contract)."""
+    from agentic_pipeline.schemas import PolicyOutput, LLMPolicyItem, LineItem
+
+    class PolicyLLM:
+        def invoke(self, messages, config=None):
+            return PolicyOutput(items=[
+                LLMPolicyItem(item_ref="LI-1", policy_status=PolicyStatus.COVERED,
+                              policy_clause="Flood damage to stock and machinery is covered."),
+            ])
+
+    monkeypatch.setattr(g, "get_structured_llm", lambda schema, **k: PolicyLLM())
+    state = ClaimState(policy={"clauses": "Flood damage to stock and machinery is covered."}, event={})
+    state.line_items = [LineItem(item_ref="LI-1", name="Sarees", category="Stock")]
+    out = g.policy_agent_node(state)
+    assert out["line_items"][0].policy_status == PolicyStatus.COVERED
+
+
+def test_document_extract_populates_fields(monkeypatch, tmp_path):
+    invoice = tmp_path / "inv.jpg"
+    invoice.write_bytes(b"inv")
+    monkeypatch.setattr(g, "get_structured_llm", lambda schema, **kwargs: MockLLM(schema))
+
+    state = ClaimState(
+        policy={}, event={},
+        documents=[DocumentRecord(document_id="DOC-INV-1", document_type="Invoice",
+                                  file_ref=str(invoice), uploaded_at=datetime.now(timezone.utc))],
+    )
+    out = g.document_extract_node(state)
+    doc = out["documents"][0]
+    assert doc.extraction_done is True
+    assert doc.extracted_unit_value == 1000.0
+    assert doc.extracted_quantity == 180

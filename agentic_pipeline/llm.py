@@ -100,6 +100,9 @@ def get_structured_llm(
     return base_llm.with_structured_output(schema, method=method)
 
 
+_log = logging.getLogger("agentic_pipeline.llm")
+
+
 def invoke_structured(
     structured_model,
     messages: list,
@@ -112,11 +115,26 @@ def invoke_structured(
     calling); others fall back to prompted JSON and occasionally return
     a payload that fails schema validation. Retry a few times — a fresh
     sample often self-corrects — before re-raising the last error.
+
+    Every failure is logged (attempt number, exception type, message) so
+    schema-validation drift and transient provider errors are visible
+    rather than silently swallowed.
     """
+    if max_retries < 1:
+        raise ValueError(f"max_retries must be >= 1, got {max_retries}")
+
     last_error: Exception | None = None
-    for _ in range(max_retries):
+    for attempt in range(1, max_retries + 1):
         try:
             return structured_model.invoke(messages, config=config)
         except Exception as e:
             last_error = e
+            _log.warning(
+                "invoke_structured attempt %d/%d failed: %s: %s",
+                attempt, max_retries, type(e).__name__, e,
+            )
+    _log.error(
+        "invoke_structured exhausted %d attempts; re-raising last error: %s: %s",
+        max_retries, type(last_error).__name__, last_error,
+    )
     raise last_error
