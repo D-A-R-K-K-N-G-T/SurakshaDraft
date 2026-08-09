@@ -20,6 +20,9 @@ class ClaimRecord {
   final DateTime lossDate;
   final String? businessType;
   final String? gstinNumber;
+  final String? draftPackSummary;
+  final String? aiReasoning;
+  final String? policyStatusText;
   final ClaimStatus status;
 
   ClaimRecord({
@@ -38,6 +41,53 @@ class ClaimRecord {
     required this.lossDate,
     this.businessType,
     this.gstinNumber,
-    this.status = ClaimStatus.submitted,
+    this.draftPackSummary,
+    this.aiReasoning,
+    this.policyStatusText,
+    this.status = ClaimStatus.pending,
   });
+
+  ClaimRecord copyWith({
+    String? id,
+    String? itemName,
+    String? category,
+    String? itemType,
+    String? policyPdfPath,
+    String? policyPdfName,
+    String? photoPath,
+    String? geotag,
+    String? timestamp,
+    String? govtIdPath,
+    String? govtIdName,
+    String? permanentAddress,
+    DateTime? lossDate,
+    String? businessType,
+    String? gstinNumber,
+    String? draftPackSummary,
+    String? aiReasoning,
+    String? policyStatusText,
+    ClaimStatus? status,
+  }) {
+    return ClaimRecord(
+      id: id ?? this.id,
+      itemName: itemName ?? this.itemName,
+      category: category ?? this.category,
+      itemType: itemType ?? this.itemType,
+      policyPdfPath: policyPdfPath ?? this.policyPdfPath,
+      policyPdfName: policyPdfName ?? this.policyPdfName,
+      photoPath: photoPath ?? this.photoPath,
+      geotag: geotag ?? this.geotag,
+      timestamp: timestamp ?? this.timestamp,
+      govtIdPath: govtIdPath ?? this.govtIdPath,
+      govtIdName: govtIdName ?? this.govtIdName,
+      permanentAddress: permanentAddress ?? this.permanentAddress,
+      lossDate: lossDate ?? this.lossDate,
+      businessType: businessType ?? this.businessType,
+      gstinNumber: gstinNumber ?? this.gstinNumber,
+      draftPackSummary: draftPackSummary ?? this.draftPackSummary,
+      aiReasoning: aiReasoning ?? this.aiReasoning,
+      policyStatusText: policyStatusText ?? this.policyStatusText,
+      status: status ?? this.status,
+    );
+  }
 }

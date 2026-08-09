@@ -134,7 +134,7 @@ class _CameraScreenState extends State<CameraScreen> {
       if (!mounted) return;
 
       // Direct transition to Step 3: Claim Form (NO AI verification!)
-      Navigator.pushReplacement(
+      final result = await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => ClaimFormScreen(
@@ -147,6 +147,8 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
       );
+      if (!mounted) return;
+      Navigator.pop(context, result);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

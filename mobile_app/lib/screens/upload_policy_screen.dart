@@ -37,7 +37,7 @@ class _UploadPolicyScreenState extends State<UploadPolicyScreen> {
     }
   }
 
-  void _proceedToCamera() {
+  void _proceedToCamera() async {
     if (_policyFileName == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -48,7 +48,7 @@ class _UploadPolicyScreenState extends State<UploadPolicyScreen> {
       return;
     }
 
-    Navigator.pushReplacement(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => CameraScreen(
@@ -58,6 +58,8 @@ class _UploadPolicyScreenState extends State<UploadPolicyScreen> {
         ),
       ),
     );
+    if (!mounted) return;
+    Navigator.pop(context, result);
   }
 
   @override

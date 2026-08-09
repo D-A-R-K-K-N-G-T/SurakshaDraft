@@ -43,9 +43,16 @@ def intake_node(state: ClaimState) -> dict:
     
     try:
         event_date = datetime.fromisoformat(event_date_str.replace("Z", "+00:00"))
+        if event_date.tzinfo is None:
+            event_date = event_date.replace(tzinfo=timezone.utc)
+            
         if policy_start_str and policy_end_str:
             p_start = datetime.fromisoformat(policy_start_str.replace("Z", "+00:00"))
+            if p_start.tzinfo is None: p_start = p_start.replace(tzinfo=timezone.utc)
+            
             p_end = datetime.fromisoformat(policy_end_str.replace("Z", "+00:00"))
+            if p_end.tzinfo is None: p_end = p_end.replace(tzinfo=timezone.utc)
+            
             if not (p_start <= event_date <= p_end):
                 intake_ok = False
     except ValueError:
@@ -73,6 +80,8 @@ def evidence_verify_node(state: ClaimState) -> dict:
     event_date_str = state.event.get("event_date", "")
     try:
         event_date = datetime.fromisoformat(event_date_str.replace("Z", "+00:00"))
+        if event_date.tzinfo is None:
+            event_date = event_date.replace(tzinfo=timezone.utc)
     except ValueError:
         event_date = None
         
@@ -165,7 +174,7 @@ def vision_node(state: ClaimState) -> dict:
     ]
 
     return {
-        "line_items": new_line_items,
+        "line_items": state.line_items + new_line_items,
         "anomalies": result.anomalies,
         "pending_signals": result.missing_signals,
         "vision_processed_evidence_ids": [e.evidence_id for e in new_evidence],

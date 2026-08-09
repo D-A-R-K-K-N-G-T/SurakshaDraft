@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../models/claim_model.dart';
 
 class ClaimFormScreen extends StatefulWidget {
@@ -118,7 +120,7 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
     }
   }
 
-  void _submitClaim() {
+  Future<void> _submitClaim() async {
     if (!_formKey.currentState!.validate()) return;
     if (_govtIdName == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -132,8 +134,51 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
 
     setState(() => _isSubmitting = true);
 
+    // Send HTTP Multipart POST request to Express Node Backend (port 3000)
+    String endpoint;
+    if (_selectedCategory == 'Commercial') {
+      endpoint = 'http://10.0.2.2:3000/api/commercial/submit';
+    } else if (_selectedCategory == 'Insurance Firm') {
+      endpoint = 'http://10.0.2.2:3000/api/insurance/submit';
+    } else {
+      endpoint = 'http://10.0.2.2:3000/api/personal/submit';
+    }
+
+    String backendClaimId = 'CLM-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+
+    try {
+      final request = http.MultipartRequest('POST', Uri.parse(endpoint));
+      request.fields['product'] = _itemNameController.text.trim();
+      request.fields['description'] = 'Claim for ${_itemNameController.text.trim()} ($_selectedItemType)';
+      request.fields['event_date'] = _lossDate.toIso8601String();
+      request.fields['categories'] = _selectedItemType;
+
+      if (widget.photoPath != null && widget.photoPath!.isNotEmpty) {
+        request.files.add(await http.MultipartFile.fromPath('files', widget.photoPath!));
+      }
+      if (_govtIdPath != null && _govtIdPath!.isNotEmpty) {
+        request.files.add(await http.MultipartFile.fromPath('files', _govtIdPath!));
+      }
+      if (widget.policyPdfPath != null && widget.policyPdfPath!.isNotEmpty) {
+        request.files.add(await http.MultipartFile.fromPath('files', widget.policyPdfPath!));
+      }
+
+      final response = await request.send().timeout(const Duration(seconds: 4));
+      debugPrint('Node Backend response status: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        final responseData = await response.stream.bytesToString();
+        final jsonResponse = jsonDecode(responseData);
+        if (jsonResponse['success'] == true && jsonResponse['data'] != null) {
+          backendClaimId = jsonResponse['data']['claim_id'] ?? backendClaimId;
+        }
+      }
+    } catch (e) {
+      debugPrint('Backend connection notice: $e (Proceeding with local claim entry)');
+    }
+
     final newClaim = ClaimRecord(
-      id: 'CLM-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+      id: backendClaimId,
       itemName: _itemNameController.text.trim(),
       category: _selectedCategory,
       itemType: _selectedItemType,
@@ -152,9 +197,10 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
       gstinNumber: _selectedCategory == 'Commercial'
           ? _gstinController.text.trim()
           : null,
-      status: ClaimStatus.submitted,
+      status: ClaimStatus.pending,
     );
 
+    if (!mounted) return;
     Navigator.pop(context, newClaim);
   }
 

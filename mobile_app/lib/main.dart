@@ -591,10 +591,46 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   bool _isLoading = false;
+  String? _userCategory;
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
     serverClientId: '804457732869-j0csnv8k9f5tualkv4p6nicb59gaj1pk.apps.googleusercontent.com',
   );
+
+  final _firmNameController = TextEditingController();
+  final _firmPasswordController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategory();
+  }
+
+  Future<void> _loadCategory() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _userCategory = prefs.getString('user_category') ?? 'Personal';
+    });
+  }
+
+  Future<void> _handleFirmSignIn() async {
+    if (_firmNameController.text.trim().toUpperCase() == 'ABC' && _firmPasswordController.text == '1234') {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('is_signed_in', true);
+      await prefs.setString('policy_business_name', 'ABC Insurance Dashboard');
+      await prefs.setString('user_email', 'admin@abc.com');
+      await prefs.setString('user_name', 'ABC Firm Admin');
+      if (!mounted) return;
+      navigateNextAfterAuth(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid Firm Credentials. Hint: use ABC and 1234'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
 
   Future<void> _handleGoogleSignIn() async {
     setState(() => _isLoading = true);
@@ -649,6 +685,14 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_userCategory == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_userCategory == 'Insurance Firm') {
+      return _buildFirmLogin();
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: SafeArea(
@@ -704,6 +748,81 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                       ),
                     ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFirmLogin() {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.business, size: 64, color: Color(0xFF4F46E5)),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Insurance Firm Login',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0F172A),
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _firmNameController,
+                decoration: InputDecoration(
+                  labelText: 'Firm Name',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.business_center),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _firmPasswordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.lock),
+                ),
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4F46E5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: _handleFirmSignIn,
+                  child: const Text(
+                    'Login',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
