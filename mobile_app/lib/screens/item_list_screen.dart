@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../config.dart';
 import '../models/claim_model.dart';
 import '../models/lor_model.dart';
+import '../services/identity.dart';
+import '../services/draft_store.dart';
+import 'claim_form_screen.dart';
 import 'lor_checklist_screen.dart';
 import 'upload_policy_screen.dart';
 
@@ -19,6 +23,7 @@ class ItemListScreen extends StatefulWidget {
 
 class _ItemListScreenState extends State<ItemListScreen> {
   List<ClaimRecord> _claims = [];
+  List<DraftClaim> _drafts = [];
   String _selectedFilter = 'All';
   String _businessName = 'My Claims Dashboard';
   String _policyNumber = 'POL-ACTIVE';
@@ -33,42 +38,239 @@ class _ItemListScreenState extends State<ItemListScreen> {
 
   Future<void> _loadDashboardData() async {
     final prefs = await SharedPreferences.getInstance();
+    final category = prefs.getString('user_category') ?? 'Personal';
+    final businessName = prefs.getString('policy_business_name') ?? 'My Claims Dashboard';
+
+    final demo = <ClaimRecord>[];
+    if (category == 'Insurance Firm' && businessName.contains('ABC')) {
+      demo.addAll([
+        ClaimRecord(
+          id: 'CLM-ABC-001',
+          itemName: 'Damaged Warehouse Roof',
+          category: 'Commercial',
+          itemType: 'Commercial Property & Building',
+          geotag: '28.7041° N, 77.1025° E',
+          timestamp: '2026-08-08 14:20:00',
+          permanentAddress: 'Delhi Industrial Area',
+          lossDate: DateTime.now().subtract(const Duration(days: 2)),
+          status: ClaimStatus.pending,
+          businessType: 'Logistics',
+        ),
+        ClaimRecord(
+          id: 'CLM-ABC-002',
+          itemName: 'Flooded Server Room',
+          category: 'Commercial',
+          itemType: 'IT Hardware & Office Electronics',
+          geotag: '12.9716° N, 77.5946° E',
+          timestamp: '2026-08-07 09:15:00',
+          permanentAddress: 'Bengaluru Tech Park',
+          lossDate: DateTime.now().subtract(const Duration(days: 4)),
+          status: ClaimStatus.review,
+          businessType: 'IT Services',
+          draftPackSummary: '### Main Schedule\nThe server room equipment is covered under comprehensive peril.\n\n### Rejected Items\nNo items rejected.',
+        ),
+      ]);
+    }
+
     setState(() {
-      _userCategory = prefs.getString('user_category') ?? 'Personal';
-      _businessName = prefs.getString('policy_business_name') ?? 'My Claims Dashboard';
+      _userCategory = category;
+      _businessName = businessName;
       _policyNumber = prefs.getString('policy_number') ?? 'POL-ACTIVE';
       _insurerName = prefs.getString('policy_insurer') ?? 'Insurance Company';
-
-      if (_userCategory == 'Insurance Firm' && _businessName.contains('ABC')) {
-        _claims = [
-          ClaimRecord(
-            id: 'CLM-ABC-001',
-            itemName: 'Damaged Warehouse Roof',
-            category: 'Commercial',
-            itemType: 'Commercial Property & Building',
-            geotag: '28.7041° N, 77.1025° E',
-            timestamp: '2026-08-08 14:20:00',
-            permanentAddress: 'Delhi Industrial Area',
-            lossDate: DateTime.now().subtract(const Duration(days: 2)),
-            status: ClaimStatus.pending,
-            businessType: 'Logistics',
-          ),
-          ClaimRecord(
-            id: 'CLM-ABC-002',
-            itemName: 'Flooded Server Room',
-            category: 'Commercial',
-            itemType: 'IT Hardware & Office Electronics',
-            geotag: '12.9716° N, 77.5946° E',
-            timestamp: '2026-08-07 09:15:00',
-            permanentAddress: 'Bengaluru Tech Park',
-            lossDate: DateTime.now().subtract(const Duration(days: 4)),
-            status: ClaimStatus.review,
-            businessType: 'IT Services',
-            draftPackSummary: '### Main Schedule\nThe server room equipment is covered under comprehensive peril.\n\n### Rejected Items\nNo items rejected.',
-          ),
-        ];
-      }
+      _claims = demo;
     });
+
+    // Offline drafts saved on this device (captured with no internet).
+    await _reloadDrafts();
+
+    // Claim history from the server — this is what makes claims survive an app
+    // restart / reinstall instead of living only in memory.
+    await _fetchServerClaims();
+  }
+
+  Future<void> _reloadDrafts() async {
+    final drafts = await DraftStore.load();
+    if (!mounted) return;
+    setState(() => _drafts = drafts);
+  }
+
+  /// Resume an offline draft: reopen the claim form pre-filled with the captured
+  /// evidence and any entered details. On a successful submit the form clears the
+  /// draft; either way we refresh the drafts list.
+  Future<void> _resumeDraft(DraftClaim d) async {
+    List<Map<String, dynamic>>? confirmed;
+    if (d.confirmedItemsJson != null && d.confirmedItemsJson!.isNotEmpty) {
+      try {
+        confirmed = (jsonDecode(d.confirmedItemsJson!) as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        confirmed = null;
+      }
+    }
+    final result = await Navigator.push<ClaimRecord>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ClaimFormScreen(
+          draftId: d.id,
+          policyPdfName: d.policyPdfName,
+          policyPdfPath: d.policyPdfPath,
+          photoPath: d.photoPath,
+          geotag: d.geotag,
+          timestamp: d.timestamp,
+          photoLat: d.photoLat,
+          photoLon: d.photoLon,
+          photoCapturedAt: d.photoCapturedAt,
+          userCategory: d.userCategory,
+          confirmedItems: confirmed,
+          initialItemName: d.itemName,
+          initialItemType: d.itemType,
+          initialAddress: d.permanentAddress,
+          initialBusinessType: d.businessType,
+          initialGstin: d.gstinNumber,
+          initialLossDate: d.lossDate != null ? DateTime.tryParse(d.lossDate!) : null,
+          initialGovtIdName: d.govtIdName,
+          initialGovtIdPath: d.govtIdPath,
+          initialInvoiceName: d.invoiceName,
+          initialInvoicePath: d.invoicePath,
+        ),
+      ),
+    );
+    await _reloadDrafts();
+    if (result != null && mounted) {
+      setState(() => _claims.insert(0, result));
+      if (result.id.startsWith('CLM-') && result.id.length > 10) {
+        _pollClaimStatus(result.id);
+      }
+    }
+  }
+
+  Future<void> _deleteDraft(DraftClaim d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard draft?'),
+        content: const Text('This removes the saved photo and details for this draft.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Discard', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await DraftStore.delete(d.id);
+      await _reloadDrafts();
+    }
+  }
+
+  /// GET /api/claims (scoped to the signed-in user via the bearer token) and
+  /// merge any claims not already shown. Best effort — offline just shows the
+  /// local/demo list.
+  Future<void> _fetchServerClaims() async {
+    try {
+      final headers = await authHeaders();
+      final resp = await http
+          .get(Uri.parse('$kApiBase/api/claims?limit=50'), headers: headers)
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return;
+      final data = jsonDecode(resp.body);
+      final list = (data['claims'] as List?) ?? [];
+      final serverClaims = [
+        for (final c in list) if (c is Map) _serverClaimToRecord(c),
+      ];
+      if (!mounted) return;
+      setState(() {
+        final existing = _claims.map((e) => e.id).toSet();
+        for (final sc in serverClaims) {
+          if (sc.id.isNotEmpty && !existing.contains(sc.id)) _claims.add(sc);
+        }
+      });
+    } catch (e) {
+      debugPrint('Fetch claims skipped (offline?): $e');
+    }
+  }
+
+  ClaimStatus _mapServerStatus(String s) {
+    switch (s) {
+      case 'completed':
+        return ClaimStatus.review;
+      case 'awaiting_documents':
+        return ClaimStatus.awaitingDocuments;
+      case 'failed':
+        return ClaimStatus.review;
+      default:
+        return ClaimStatus.pending;
+    }
+  }
+
+  ClaimRecord _serverClaimToRecord(Map c) {
+    DateTime loss;
+    try {
+      loss = DateTime.parse((c['created_at'] ?? '').toString());
+    } catch (_) {
+      loss = DateTime.now();
+    }
+    final desc = (c['event_description'] ?? '').toString();
+    return ClaimRecord(
+      id: (c['claim_ref'] ?? '').toString(),
+      itemName: desc.isNotEmpty ? desc : 'Claim ${c['claim_ref']}',
+      category: _userCategory ?? 'Personal',
+      itemType: (c['claim_type'] ?? '—').toString(),
+      geotag: 'Location on file',
+      timestamp: (c['created_at'] ?? '').toString(),
+      permanentAddress: '',
+      lossDate: loss,
+      status: _mapServerStatus((c['status'] ?? '').toString()),
+    );
+  }
+
+  /// A claim from the list has only a summary. Fetch its full state on demand so
+  /// the review modal / checklist have the draft pack and LOR.
+  Future<ClaimRecord?> _hydrateClaim(ClaimRecord claim) async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$kApiBase/api/claim/${claim.id}'))
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return null;
+      final data = jsonDecode(resp.body);
+      final state = data['state'] ?? {};
+      final draftPack = state['draft_pack'] ?? {};
+      final updated = claim.copyWith(
+        draftPackSummary: _buildDraftSummary(draftPack, state),
+        policyStatusText: _summarizePolicyStatus(state),
+        lor: LorPack.tryFrom(state['lor']),
+      );
+      final idx = _claims.indexWhere((e) => e.id == claim.id);
+      if (idx != -1 && mounted) setState(() => _claims[idx] = updated);
+      return updated;
+    } catch (e) {
+      debugPrint('Hydrate failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _onClaimTap(ClaimRecord claim) async {
+    var c = claim;
+    final needsHydration =
+        (c.status == ClaimStatus.review && c.draftPackSummary == null) ||
+            (c.status == ClaimStatus.awaitingDocuments && c.lor == null);
+    if (needsHydration) {
+      final hydrated = await _hydrateClaim(c);
+      if (hydrated != null) c = hydrated;
+    }
+    if (!mounted) return;
+    if (c.status == ClaimStatus.awaitingDocuments) {
+      _openChecklist(c);
+    } else if (c.status == ClaimStatus.review) {
+      _showDraftPackReviewModal(c);
+    } else if (c.status == ClaimStatus.pending) {
+      _showPendingStatusModal(c);
+    } else {
+      _showDraftPackReviewModal(c);
+    }
   }
 
   Future<void> _signOut() async {
@@ -86,6 +288,9 @@ class _ItemListScreenState extends State<ItemListScreen> {
         builder: (_) => UploadPolicyScreen(userCategory: _userCategory),
       ),
     );
+
+    // The user may have saved a draft partway through (e.g. offline).
+    await _reloadDrafts();
 
     if (newClaim != null) {
       setState(() {
@@ -816,7 +1021,7 @@ There are currently no rejected items.''',
 
             // Claims List or Empty State
             Expanded(
-              child: _filteredClaims.isEmpty
+              child: (_drafts.isEmpty && _filteredClaims.isEmpty)
                   ? Center(
                       child: SingleChildScrollView(
                         child: Padding(
@@ -875,13 +1080,27 @@ There are currently no rejected items.''',
                         ),
                       ),
                     )
-                  : ListView.builder(
+                  : ListView(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 90),
-                      itemCount: _filteredClaims.length,
-                      itemBuilder: (context, index) {
-                        final claim = _filteredClaims[index];
-                        return _buildClaimCard(claim);
-                      },
+                      children: [
+                        if (_drafts.isNotEmpty) ...[
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 8, top: 4),
+                            child: Text(
+                              'OFFLINE DRAFTS',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFD97706),
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ),
+                          ..._drafts.map(_buildDraftCard),
+                          const SizedBox(height: 12),
+                        ],
+                        ..._filteredClaims.map(_buildClaimCard),
+                      ],
                     ),
             ),
           ],
@@ -926,6 +1145,83 @@ There are currently no rejected items.''',
     );
   }
 
+  Widget _buildDraftCard(DraftClaim d) {
+    final hasPhoto = d.photoPath != null && d.photoPath!.isNotEmpty && File(d.photoPath!).existsSync();
+    final title = d.itemName.isNotEmpty ? d.itemName : 'Untitled draft';
+    return GestureDetector(
+      onTap: () => _resumeDraft(d),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFF59E0B)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14.0),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: hasPhoto
+                    ? Image.file(File(d.photoPath!), width: 54, height: 54, fit: BoxFit.cover)
+                    : Container(
+                        width: 54,
+                        height: 54,
+                        color: const Color(0xFFFDE68A),
+                        child: const Icon(Icons.photo_camera_back, color: Color(0xFFB45309)),
+                      ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF59E0B),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text('DRAFT • OFFLINE',
+                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white)),
+                        ),
+                        const Spacer(),
+                        const Icon(Icons.cloud_off, size: 16, color: Color(0xFFB45309)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${d.userCategory ?? ''}${d.timestamp.isNotEmpty ? ' • ${d.timestamp}' : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF92400E)),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text('Tap to finish & submit when online',
+                        style: TextStyle(fontSize: 10, color: Color(0xFFB45309), fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, color: Color(0xFFB45309)),
+                tooltip: 'Discard draft',
+                onPressed: () => _deleteDraft(d),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildClaimCard(ClaimRecord claim) {
     Color statusBgColor;
     Color statusTextColor;
@@ -958,17 +1254,7 @@ There are currently no rejected items.''',
     }
 
     return GestureDetector(
-      onTap: () {
-        if (claim.status == ClaimStatus.awaitingDocuments) {
-          _openChecklist(claim);
-        } else if (claim.status == ClaimStatus.review) {
-          _showDraftPackReviewModal(claim);
-        } else if (claim.status == ClaimStatus.pending) {
-          _showPendingStatusModal(claim);
-        } else {
-          _showDraftPackReviewModal(claim);
-        }
-      },
+      onTap: () => _onClaimTap(claim),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         decoration: BoxDecoration(

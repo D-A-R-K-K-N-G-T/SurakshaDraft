@@ -212,6 +212,10 @@ class DocumentRecord(BaseModel):
     document_id: str
     document_type: str  # the slot the CLIENT claimed — an assertion, not a fact
     file_ref: str
+    # Content hash, computed by the gateway when it stores the blob (Phase 3).
+    # Optional for back-compat with older clients / the "system-generated" ref;
+    # when present the pipeline never re-hashes, and it is the FK into file_blobs.
+    sha256: Optional[str] = None
     # Set when the user uploaded this file against a specific LOR checklist row.
     # This is the ONLY thing that can satisfy an `attested` requirement — we make
     # no claim about what such a file is, only that it was supplied for that row.

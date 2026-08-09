@@ -1113,10 +1113,35 @@ def _check_sum_insured_ceiling(items: list[LineItem], policy: dict) -> list[str]
     return warnings
 
 
+def load_fraud_registries(state: ClaimState) -> tuple[dict, dict]:
+    """Cross-claim fraud registries from the DB (R2), replacing the old mocks.
+
+    Returns (hash_registry: sha256 -> prior claim_ref, serial_registry:
+    serial -> prior claim_ref), both excluding this claim. Read-only and
+    FAIL-OPEN: any DB error logs and yields empty registries, so a database
+    hiccup never blocks a genuine claimant. A module-level function on purpose,
+    so tests can monkeypatch it and the node stays unit-testable.
+    """
+    sha256s = [e.sha256 for e in state.evidence if getattr(e, "sha256", None)]
+    serials = [i.serial_number for i in state.line_items if i.serial_number]
+    if not sha256s and not serials:
+        return {}, {}
+    try:
+        from agentic_pipeline.db import session_scope
+        from agentic_pipeline import repository as repo
+
+        with session_scope() as session:
+            hashes = repo.find_cross_claim_hashes(session, state.claim_ref, sha256s)
+            serial_reg = repo.find_cross_claim_serials(session, state.claim_ref, serials)
+        return hashes, serial_reg
+    except Exception:
+        _log.exception("Cross-claim fraud lookup failed; proceeding without it")
+        return {}, {}
+
+
 def plausibility_check_node(state: ClaimState) -> dict:
-    mock_serial_registry = {"SN-RP4471": "Claim #C-88210"}
-    mock_hash_registry = {"mock_duplicate_cross_claim_hash": "Claim #C-99999"}
-    
+    hash_registry, serial_registry = load_fraud_registries(state)
+
     event_date = _parse_iso_datetime(state.event.get("event_date"))
 
     kept_items = []
@@ -1133,10 +1158,10 @@ def plausibility_check_node(state: ClaimState) -> dict:
         missing_ev_err = _check_missing_evidence(item)
         if missing_ev_err: reasons.append(missing_ev_err)
 
-        hash_err = _check_duplicate_hash(item, state, mock_hash_registry)
+        hash_err = _check_duplicate_hash(item, state, hash_registry)
         if hash_err: reasons.append(hash_err)
-            
-        serial_err = _check_duplicate_serial(item, mock_serial_registry)
+
+        serial_err = _check_duplicate_serial(item, serial_registry)
         if serial_err: reasons.append(serial_err)
             
         if reasons:
@@ -1265,7 +1290,9 @@ def send_node(state: ClaimState) -> dict:
     if state.qc and not state.qc.pass_qc and state.qc.flags:
         out["warnings"] = [f"Shipped without passing QC: {flag}" for flag in state.qc.flags]
 
-    if state.draft_pack:
+    # The draft pack is persisted to the draft_packs table by the repository;
+    # the ./out/*.json dump is optional local-debug output (settings flag).
+    if state.draft_pack and settings.write_pack_files:
         os.makedirs("./out", exist_ok=True)
         pack_str = json.dumps(state.draft_pack.model_dump(), sort_keys=True, default=str)
         h = hashlib.sha256(pack_str.encode("utf-8")).hexdigest()

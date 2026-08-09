@@ -102,6 +102,47 @@ def get_structured_llm(
 
 _log = logging.getLogger("agentic_pipeline.llm")
 
+# Run context for the llm_invocations recorder (Phase 8). The background pipeline
+# task sets this so recorded calls carry their run_id without changing any node
+# signature. Off unless settings.record_llm_invocations is True.
+import contextvars
+import time
+
+run_context: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar(
+    "llm_run_context", default=None
+)
+
+
+def set_run_context(run_id):
+    return run_context.set({"run_id": run_id})
+
+
+def reset_run_context(token) -> None:
+    try:
+        run_context.reset(token)
+    except Exception:
+        pass
+
+
+def _record_invocation(succeeded: bool, latency_ms: int, error_type: str | None) -> None:
+    if not settings.record_llm_invocations:
+        return
+    try:
+        from agentic_pipeline.db import session_scope
+        from agentic_pipeline import repository as repo
+
+        ctx = run_context.get() or {}
+        provider = settings.llm_provider
+        model = (settings.gemini_default_model if provider == "gemini"
+                 else settings.watsonx_default_model)
+        with session_scope() as s:
+            repo.record_llm_invocation(
+                s, provider=provider, model=model, succeeded=succeeded,
+                run_id=ctx.get("run_id"), latency_ms=latency_ms, error_type=error_type,
+            )
+    except Exception:
+        _log.exception("Could not record llm invocation")
+
 
 def invoke_structured(
     structured_model,
@@ -124,15 +165,20 @@ def invoke_structured(
         raise ValueError(f"max_retries must be >= 1, got {max_retries}")
 
     last_error: Exception | None = None
+    started = time.monotonic()
     for attempt in range(1, max_retries + 1):
         try:
-            return structured_model.invoke(messages, config=config)
+            result = structured_model.invoke(messages, config=config)
+            _record_invocation(True, int((time.monotonic() - started) * 1000), None)
+            return result
         except Exception as e:
             last_error = e
             _log.warning(
                 "invoke_structured attempt %d/%d failed: %s: %s",
                 attempt, max_retries, type(e).__name__, e,
             )
+    _record_invocation(False, int((time.monotonic() - started) * 1000),
+                       type(last_error).__name__ if last_error else None)
     _log.error(
         "invoke_structured exhausted %d attempts; re-raising last error: %s: %s",
         max_retries, type(last_error).__name__, last_error,

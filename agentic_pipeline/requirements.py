@@ -32,6 +32,7 @@ from typing import Iterable, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
+from agentic_pipeline.config import settings
 from agentic_pipeline.schemas import (
     ClaimTypeSection,
     DocumentKind,
@@ -124,6 +125,99 @@ def _load_file(path: str) -> Optional[RequirementRuleSet]:
     return ruleset
 
 
+# DB source cache: slug -> (fetched_at monotonic, ruleset). Rulesets are
+# immutable per (slug, version) with at most one active version, so a short TTL
+# is enough to pick up an `activate` without a restart.
+_DB_CACHE: dict[str, tuple[float, RequirementRuleSet]] = {}
+_DB_TTL_SECONDS = 30.0
+
+
+def _load_db(slug: str) -> Optional[RequirementRuleSet]:
+    """Reconstruct the active ruleset for `slug` from the catalogue tables.
+
+    Fail-open: any DB/import error logs and returns None, exactly like a missing
+    file — a database outage must never block a flood claimant.
+    """
+    import time
+
+    cached = _DB_CACHE.get(slug)
+    if cached and (time.monotonic() - cached[0]) < _DB_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        from sqlalchemy import select
+
+        from agentic_pipeline import models as M
+        from agentic_pipeline.db import SessionLocal
+
+        with SessionLocal() as session:
+            row = session.execute(
+                select(M.Ruleset).where(
+                    M.Ruleset.ruleset_slug == slug,
+                    M.Ruleset.status == "active",
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+
+            sections = sorted(row.claim_types, key=lambda c: c.ordinal)
+            section_ord = {c.section_key: c.ordinal for c in sections}
+            claim_types = [
+                ClaimTypeSection(
+                    id=c.section_key,
+                    label=c.label,
+                    description=c.description,
+                    aliases=list(c.aliases),
+                )
+                for c in sections
+            ]
+
+            rules: list[RequirementRule] = []
+            for r in sorted(row.rules, key=lambda r: r.ordinal):
+                # Order a rule's sections by their section ordinal so the
+                # reconstruction is byte-identical to the authored JSON.
+                cts = sorted(
+                    (link.claim_type.section_key for link in r.claim_type_links),
+                    key=lambda k: section_ord.get(k, 1_000_000),
+                )
+                rules.append(
+                    RequirementRule(
+                        requirement_id=r.requirement_id,
+                        label=r.label,
+                        help_text=r.help_text,
+                        claim_types=cts,
+                        verification=RequirementVerification(r.verification),
+                        accepts=[DocumentKind(a) for a in r.accepts],
+                        severity=RequirementSeverity(r.severity),
+                        applies_when=RequirementCondition(
+                            categories=list(r.when_categories),
+                            item_types=list(r.when_item_types),
+                            account_types=list(r.when_account_types),
+                        ),
+                    )
+                )
+
+            ruleset = RequirementRuleSet(
+                ruleset_id=row.ruleset_slug,
+                version=row.version,
+                source=row.source or "",
+                claim_types=claim_types,
+                rules=rules,
+            )
+    except Exception as exc:  # fail-open — never raise into a claim
+        _log.error("Could not load ruleset %r from DB: %s: %s", slug, type(exc).__name__, exc)
+        return None
+
+    _DB_CACHE[slug] = (time.monotonic(), ruleset)
+    return ruleset
+
+
+def _load_by_slug(slug: str) -> Optional[RequirementRuleSet]:
+    if settings.ruleset_source == "db":
+        return _load_db(slug)
+    return _load_file(ruleset_path(slug))
+
+
 def load_ruleset(insurer: Optional[str]) -> Optional[RequirementRuleSet]:
     """Select the client's ruleset by insurer name, falling back to default.
 
@@ -131,13 +225,34 @@ def load_ruleset(insurer: Optional[str]) -> Optional[RequirementRuleSet]:
     "no requirements known" and let the claim proceed.
     """
     if insurer:
-        found = _load_file(ruleset_path(slugify(insurer)))
+        found = _load_by_slug(slugify(insurer))
         if found is not None:
             return found
-    return _load_file(ruleset_path(DEFAULT_RULESET_ID))
+    return _load_by_slug(DEFAULT_RULESET_ID)
+
+
+def _list_db() -> list[str]:
+    try:
+        from sqlalchemy import select
+
+        from agentic_pipeline import models as M
+        from agentic_pipeline.db import SessionLocal
+
+        with SessionLocal() as session:
+            slugs = session.execute(
+                select(M.Ruleset.ruleset_slug)
+                .where(M.Ruleset.status == "active")
+                .distinct()
+            ).scalars().all()
+        return sorted(slugs)
+    except Exception as exc:
+        _log.error("Could not list rulesets from DB: %s: %s", type(exc).__name__, exc)
+        return []
 
 
 def list_ruleset_ids() -> list[str]:
+    if settings.ruleset_source == "db":
+        return _list_db()
     try:
         return sorted(
             f[:-5] for f in os.listdir(RULESET_DIR)

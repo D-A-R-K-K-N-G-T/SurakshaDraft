@@ -252,26 +252,26 @@ def test_awaiting_documents_is_not_a_rejection():
 # --------------------------------------------------------------------------
 
 def test_resume_reset_clears_derived_channels_but_keeps_inputs():
-    from agentic_pipeline.service import _RESET_ON_RESUME
+    # Phase 4: resume rebuilds an INPUTS-ONLY state via an allowlist, replacing
+    # the old _RESET_ON_RESUME denylist.
+    from agentic_pipeline.repository import _RESUME_INPUT_FIELDS
 
-    # Additive channels would double on every re-run if not reset.
-    for additive in ("warnings", "anomalies", "rejected_items", "pending_verification"):
-        assert _RESET_ON_RESUME[additive] == []
+    # Additive/derived channels are NOT inputs, so they reset on resume.
+    for derived in ("warnings", "anomalies", "rejected_items", "pending_verification", "lor", "draft_pack"):
+        assert derived not in _RESUME_INPUT_FIELDS
 
-    # These must survive, or a resume re-does work or loses the user's input.
+    # These are inputs and must survive, or a resume re-does work or loses input.
     for preserved in ("documents", "line_items", "evidence", "policy", "event",
-                      "vision_processed_evidence_ids", "claim_type",
-                      "claim_type_source", "lor"):
-        assert preserved not in _RESET_ON_RESUME, f"{preserved} must not be reset on resume"
+                      "vision_processed_evidence_ids", "claim_type", "claim_type_source"):
+        assert preserved in _RESUME_INPUT_FIELDS, f"{preserved} must survive a resume"
 
 
 def test_resume_does_not_duplicate_warnings():
-    from agentic_pipeline.service import _RESET_ON_RESUME
+    from agentic_pipeline.repository import resume_state_from_snapshot
 
-    state = _state(claim_type="burglary", documents=[_govt_id()],
-                   warnings=["first run said this"]).model_dump()
-    state.update(_RESET_ON_RESUME)
-    resumed = ClaimState.model_validate(state)
+    snap = _state(claim_type="burglary", documents=[_govt_id()],
+                  warnings=["first run said this"]).model_dump(mode="json")
+    resumed = resume_state_from_snapshot(snap)
     assert resumed.warnings == []
     assert len(resumed.documents) == 1, "documents survive the reset"
 
@@ -342,11 +342,10 @@ def test_graph_proceeds_once_requirements_are_met(monkeypatch):
 
 
 def test_user_override_survives_a_resume(monkeypatch):
-    from agentic_pipeline.service import _RESET_ON_RESUME
+    from agentic_pipeline.repository import resume_state_from_snapshot
 
-    state = _state(claim_type="fire", claim_type_source="user_override").model_dump()
-    state.update(_RESET_ON_RESUME)
-    resumed = ClaimState.model_validate(state)
+    snap = _state(claim_type="fire", claim_type_source="user_override").model_dump(mode="json")
+    resumed = resume_state_from_snapshot(snap)
     assert resumed.claim_type_source == "user_override"
 
     def explode(*a, **k):

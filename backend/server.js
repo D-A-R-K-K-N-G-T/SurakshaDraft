@@ -5,10 +5,24 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { S3Client, PutObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const PYTHON_BACKEND_URL = 'http://127.0.0.1:8000';
+
+let s3Client = null;
+if (process.env.S3_BUCKET) {
+  s3Client = new S3Client({
+    endpoint: process.env.S3_ENDPOINT_URL || 'http://localhost:9000',
+    region: process.env.AWS_REGION || 'us-east-1',
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY || 'minioadmin',
+      secretAccessKey: process.env.S3_SECRET_KEY || 'minioadmin',
+    },
+    forcePathStyle: true,
+  });
+}
 
 app.use(cors());
 app.use(express.json());
@@ -21,18 +35,91 @@ app.use((req, res, next) => {
   next();
 });
 
-// Set up multer for file uploads
+// Content-addressed blob store root. A blob for content hash `sha` lives at
+// uploads/<sha[:2]>/<sha><ext>, referenced by an fs:// URI. Mirrors
+// agentic_pipeline/blobs.py so the gateway and pipeline agree on the layout.
+const BLOB_ROOT = 'uploads';
+const TMP_DIR = path.join(BLOB_ROOT, 'tmp');
+
+// Multer writes to a temp dir under a random name; storeBlob() then hashes the
+// file and moves it into the content-addressed layout (we cannot hash in the
+// filename callback because the bytes are not on disk yet).
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const dir = 'uploads/';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+    cb(null, TMP_DIR);
   },
   filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
+    cb(null, crypto.randomUUID() + (path.extname(file.originalname || '') || '').toLowerCase());
   }
 });
 const upload = multer({ storage: storage });
+
+function blobAbsPath(sha, ext) {
+  return path.resolve(BLOB_ROOT, sha.slice(0, 2), sha + ext);
+}
+
+// Absolute local path -> fs:// URI, forward slashes for cross-platform parity
+// with the Python resolver (agentic_pipeline/blobs.py: local_path_from_ref).
+function fsUri(absPath) {
+  return 'fs://' + absPath.split(path.sep).join('/');
+}
+
+const ENCRYPTION_MAGIC = Buffer.from('SURAKSHA_ENC_V1');
+
+function encryptBufferEnvelope(buffer) {
+  if (!process.env.PII_MASTER_KEY) throw new Error("PII_MASTER_KEY not set");
+  const masterKey = Buffer.from(process.env.PII_MASTER_KEY, 'hex'); // 32 bytes
+  const dek = crypto.randomBytes(32);
+  const dekIv = crypto.randomBytes(12);
+  const dekCipher = crypto.createCipheriv('aes-256-gcm', masterKey, dekIv);
+  const encDek = Buffer.concat([dekCipher.update(dek), dekCipher.final()]);
+  const dekTag = dekCipher.getAuthTag();
+  
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', dek, iv);
+  const ciphertext = Buffer.concat([cipher.update(buffer), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  
+  // Layout: MAGIC(15) | DEK_IV(12) | DEK_TAG(16) | ENC_DEK(32) | IV(12) | TAG(16) | CIPHERTEXT
+  return Buffer.concat([ENCRYPTION_MAGIC, dekIv, dekTag, encDek, iv, tag, ciphertext]);
+}
+
+// Move a freshly-uploaded temp file into the content-addressed layout. If a blob
+// with identical content already exists it is NOT rewritten (that is the dedup),
+// and the temp file is discarded. Returns { sha256, uri }.
+async function storeBlob(file, encrypt = false) {
+  let data = fs.readFileSync(file.path);
+  let ext = (path.extname(file.originalname || '') || '').toLowerCase();
+  
+  if (encrypt && process.env.PII_MASTER_KEY) {
+    data = encryptBufferEnvelope(data);
+    ext = ext + '.enc';
+  }
+
+  const sha = crypto.createHash('sha256').update(data).digest('hex');
+  
+  if (process.env.S3_BUCKET) {
+    const key = `${sha.slice(0, 2)}/${sha}${ext}`;
+    try {
+      await s3Client.send(new HeadObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key }));
+    } catch (e) {
+      await s3Client.send(new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, Body: data }));
+    }
+    fs.unlinkSync(file.path);
+    return { sha256: sha, uri: `s3://${key}` };
+  }
+
+  const abs = blobAbsPath(sha, ext);
+  if (fs.existsSync(abs)) {
+    fs.unlinkSync(file.path);
+  } else {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, data);
+    fs.unlinkSync(file.path);
+  }
+  return { sha256: sha, uri: fsUri(abs) };
+}
 
 // The claim form uploads under named fields so the gateway can route each file
 // by ROLE, not by sniffing MIME type (a JPEG Aadhaar card must never be treated
@@ -77,21 +164,25 @@ const DOC_SPECS = [
 // `onDigest` is optional: submit uses it for the same-file-under-two-roles check.
 // `requirementId` tags every record with the checklist row it answers, which is
 // the only thing that can satisfy an `attested` requirement.
-function buildDocumentRecords(grouped, requirementId, onDigest) {
+async function buildDocumentRecords(grouped, requirementId, onDigest) {
   const documents = [];
-  DOC_SPECS.forEach(({ bucket, type, prefix, role }) => {
-    (grouped[bucket] || []).forEach((file, index) => {
-      if (onDigest) onDigest(sha256OfFile(file.path), role);
+  for (const { bucket, type, prefix, role } of DOC_SPECS) {
+    const files = grouped[bucket] || [];
+    const encrypt = (role === 'govt_id'); // PII encryption for govt IDs
+    for (const file of files) {
+      const { sha256, uri } = await storeBlob(file, encrypt);
+      if (onDigest) onDigest(sha256, role);
       const record = {
-        document_id: `${prefix}-${Date.now()}-${index}`,
+        document_id: `${prefix}-${crypto.randomUUID()}`,
         document_type: type,
-        file_ref: path.resolve(file.path),
+        file_ref: uri,
+        sha256,
         uploaded_at: new Date().toISOString(),
       };
       if (requirementId) record.requirement_id = requirementId;
       documents.push(record);
-    });
-  });
+    }
+  }
   return documents;
 }
 
@@ -156,6 +247,9 @@ function buildPolicy(body) {
 
   if (body.policy_number) policy.policy_number = body.policy_number;
   if (body.policy_insurer) policy.insurer = body.policy_insurer;
+  // Onboarding-persisted policy id: the pipeline resolves stored terms (incl.
+  // premises for the geofence) and links the claim to it.
+  if (body.policy_id) policy.policy_id = body.policy_id;
 
   const sumInsured = numOrNull(body.policy_sum_insured);
   const excess = numOrNull(body.policy_excess);
@@ -184,40 +278,38 @@ function buildPolicy(body) {
   return { policy, assumedFields };
 }
 
-// Helper to construct ClaimState from frontend data
-const constructClaimState = (body, files, accountType) => {
+const constructClaimState = async (body, files, accountType) => {
   const evidence = [];
   const documents = [];
 
   const photos = (files && files.photos) || [];
   const policyDocs = (files && files.policy_doc) || [];
 
-  // Capture metadata sent by the app. Fall back to upload time / no-geo, and
-  // record the fallback so downstream verification can account for it.
   const capturedAt = body.photo_captured_at || null;
   const lat = body.photo_lat !== undefined ? parseFloat(body.photo_lat) : NaN;
   const lon = body.photo_lon !== undefined ? parseFloat(body.photo_lon) : NaN;
   const geotag = (!isNaN(lat) && !isNaN(lon)) ? { lat, lon } : null;
 
-  // digest -> set of roles it was uploaded under, for duplicate detection.
   const digestRoles = {};
   function noteDigest(digest, role) {
     (digestRoles[digest] = digestRoles[digest] || new Set()).add(role);
   }
 
-  photos.forEach((file, index) => {
-    noteDigest(sha256OfFile(file.path), 'photo');
+  for (const file of photos) {
+    const { sha256, uri } = await storeBlob(file);
+    noteDigest(sha256, 'photo');
     evidence.push({
-      evidence_id: `IMG-${Date.now()}-${index}`,
+      evidence_id: `IMG-${crypto.randomUUID()}`,
       capture_stage: 'scene',
-      file_ref: path.resolve(file.path),
-      sha256: sha256OfFile(file.path),
+      file_ref: uri,
+      sha256,
       captured_at: capturedAt || new Date().toISOString(),
       geotag: geotag,
     });
-  });
+  }
 
-  documents.push(...buildDocumentRecords(files, null, noteDigest));
+  const docs = await buildDocumentRecords(files, null, noteDigest);
+  documents.push(...docs);
 
   // Deterministic, un-gameable duplicate check: the SAME file (same SHA-256)
   // uploaded under two DIFFERENT roles is a substitution (e.g. one PDF used as
@@ -306,6 +398,15 @@ const constructClaimState = (body, files, accountType) => {
   };
 };
 
+// Forward identity + idempotency to the pipeline. The gateway stays stateless;
+// the pipeline resolves the Firebase token to a user and dedupes on the key.
+function forwardHeaders(req) {
+  const h = {};
+  if (req.headers['authorization']) h['Authorization'] = req.headers['authorization'];
+  if (req.headers['idempotency-key']) h['Idempotency-Key'] = req.headers['idempotency-key'];
+  return h;
+}
+
 // --- Endpoints ---
 
 async function handleSubmit(category, req, res) {
@@ -320,8 +421,11 @@ async function handleSubmit(category, req, res) {
     if (missing.length) {
       return res.status(400).json({ error: 'Required documents missing.', missing });
     }
-    const claimState = constructClaimState(req.body, grouped, category);
-    const response = await axios.post(`${PYTHON_BACKEND_URL}/api/v1/claim/submit`, claimState);
+    const claimState = await constructClaimState(req.body, grouped, category);
+    const response = await axios.post(
+      `${PYTHON_BACKEND_URL}/api/v1/claim/submit`, claimState,
+      { headers: forwardHeaders(req) }
+    );
     // response.data carries the instant revision-1 LOR alongside claim_id, and
     // is passed through untouched — the app renders the checklist from it.
     res.json({ success: true, category, data: response.data });
@@ -336,13 +440,14 @@ async function handleSubmit(category, req, res) {
 app.post('/api/claim/:claim_id/documents', CLAIM_UPLOAD_FIELDS, async (req, res) => {
   try {
     const grouped = groupFilesByField(req.files);
-    const documents = buildDocumentRecords(grouped, req.body.requirement_id || null, null);
+    const documents = await buildDocumentRecords(grouped, req.body.requirement_id || null, null);
     if (!documents.length) {
       return res.status(400).json({ error: 'No documents supplied.' });
     }
     const response = await axios.post(
       `${PYTHON_BACKEND_URL}/api/v1/claim/${req.params.claim_id}/documents`,
-      { documents }
+      { documents },
+      { headers: forwardHeaders(req) }
     );
     res.json({ success: true, data: response.data });
   } catch (error) {
@@ -371,6 +476,48 @@ app.post('/api/claim/:claim_id/claim-type', async (req, res) => {
       : { error: 'Failed to update the claim type.' };
     console.error('Claim-type Error:', error.message);
     res.status(status).json(detail);
+  }
+});
+
+// Persist an onboarding policy once; the app then sends policy_id on submit.
+app.post('/api/policies', async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${PYTHON_BACKEND_URL}/api/v1/policies`, req.body,
+      { headers: forwardHeaders(req) }
+    );
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    console.error('Create-policy Error:', error.message);
+    res.status(status).json({ error: 'Failed to create the policy.' });
+  }
+});
+
+// The claimant's claim history — replaces the app's in-memory list.
+app.get('/api/claims', async (req, res) => {
+  try {
+    const response = await axios.get(`${PYTHON_BACKEND_URL}/api/v1/claims`, {
+      params: req.query,
+      headers: forwardHeaders(req),
+    });
+    res.json(response.data);
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    res.status(status).json({ error: 'Failed to fetch claims.' });
+  }
+});
+
+// Latest LOR pack only — lighter than polling the whole claim state.
+app.get('/api/claim/:claim_id/lor', async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${PYTHON_BACKEND_URL}/api/v1/claim/${req.params.claim_id}/lor`
+    );
+    res.json(response.data);
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    res.status(status).json({ error: 'Failed to fetch the checklist.' });
   }
 });
 

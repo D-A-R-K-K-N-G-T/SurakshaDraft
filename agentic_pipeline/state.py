@@ -27,6 +27,10 @@ from agentic_pipeline.schemas import (
 
 
 class ClaimState(BaseModel):
+    # Set by the service once the claim ref is known, so the fraud registries
+    # (plausibility_check_node) can exclude this claim from its own lookups.
+    claim_ref: Optional[str] = None
+
     policy: dict
     event: dict
 

@@ -9,6 +9,64 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # --- persistence (Phase 1: database foundation) ---
+    # SQLAlchemy URL for the pipeline's Postgres. The default matches
+    # docker-compose.yml so `docker compose up -d db` + alembic just works
+    # locally; override via DATABASE_URL in .env / the environment. Always use
+    # the psycopg (v3) driver — psycopg2 is not a dependency of this project.
+    database_url: str = (
+        "postgresql+psycopg://suraksha:suraksha@localhost:5432/suraksha"
+    )
+    # Echo emitted SQL to the logger. Handy while wiring the repository layer;
+    # keep off in normal runs and never on in production (it logs query params).
+    database_echo: bool = False
+
+    # Where requirements.load_ruleset reads master LORs from:
+    #   "file" — the JSON files under agentic_pipeline/rulesets/ (default; keeps
+    #            local dev and the pure-function tests working with zero DB).
+    #   "db"   — the rulesets catalogue tables (Phase 2). Fail-open either way:
+    #            a load error logs and returns None, never blocks a claim.
+    ruleset_source: str = "file"
+
+    # --- content-addressed blob store (Phase 3) ---
+    # Root of the content-addressed layout: uploads/{sha[:2]}/{sha}{ext}. The
+    # gateway writes here and emits fs:// URIs; the backfill script reorganizes
+    # legacy uploads into it. Relative paths resolve from the gateway CWD
+    # (backend/) — the app and pipeline share this filesystem in dev.
+    blob_store_root: str = "backend/uploads"
+
+    # --- S3 Blob Store ---
+    # If s3_bucket is set, the pipeline uses S3 instead of local fs.
+    s3_bucket: str = ""
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+
+    # --- PII Encryption ---
+    # 32-byte hex string for AES-GCM envelope encryption
+    pii_master_key: str = ""
+
+    # --- Task Queue ---
+    redis_url: str = "redis://localhost:6379/0"
+
+    # --- draft-pack output (Phase 5) ---
+    # The DB is now the system of record for draft packs (draft_packs table);
+    # the legacy ./out/claim_pack_{hash}.json dump is optional local-debug only.
+    write_pack_files: bool = False
+
+    # --- identity (Phase 7) ---
+    # "disabled" — no identity; claims stay anonymous (default, non-breaking).
+    # "demo"     — the bearer token IS the user subject (dev/testing only).
+    # "firebase" — verify a Firebase ID token via firebase-admin (needs
+    #              GOOGLE_APPLICATION_CREDENTIALS / a service account).
+    auth_mode: str = "firebase"
+
+    # --- observability (Phase 8) ---
+    # When True, invoke_structured records each call into llm_invocations. Off by
+    # default (zero overhead / no behavior change); enable in deployments that
+    # want the LLM audit trail.
+    record_llm_invocations: bool = False
+
     # --- provider switch ---
     # "gemini" while prototyping in the notebook, "watsonx" for the real deployment.
     llm_provider: str = "gemini"

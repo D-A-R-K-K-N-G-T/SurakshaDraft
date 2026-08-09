@@ -1,0 +1,72 @@
+# Local development stack for SurakshaDraft persistence (Phase 1 foundation).
+#
+#   docker compose up -d db
+#   DATABASE_URL=postgresql+psycopg://suraksha:suraksha@localhost:5432/suraksha \
+#     alembic upgrade head
+#
+# Postgres 16 is pinned deliberately (§2 of the DB plan). The DATABASE_URL the
+# app reads defaults to these credentials — see agentic_pipeline/config.py.
+services:
+  db:
+    image: postgres:16
+    container_name: suraksha_db
+    environment:
+      POSTGRES_USER: suraksha
+      POSTGRES_PASSWORD: suraksha
+      POSTGRES_DB: suraksha
+      # timestamptz correctness (R10): keep the server in UTC.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - suraksha_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suraksha -d suraksha"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional lightweight SQL UI at http://localhost:8080 (server: db, user/pass: suraksha).
+  adminer:
+    image: adminer:4
+    container_name: suraksha_adminer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  nginx:
+    image: nginx:latest
+    container_name: suraksha_proxy
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    container_name: suraksha_redis
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio
+    container_name: suraksha_s3
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - suraksha_s3data:/data
+
+volumes:
+  suraksha_pgdata:
+  suraksha_s3data:

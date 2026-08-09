@@ -1,5 +1,9 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config.dart';
+import '../services/identity.dart';
 import 'item_list_screen.dart';
 
 class PolicyOnboardingScreen extends StatefulWidget {
@@ -62,12 +66,52 @@ class _PolicyOnboardingScreenState extends State<PolicyOnboardingScreen> {
 
     await prefs.setBool('policy_setup_complete', true);
 
+    // Persist the policy on the server once and remember its id; the claim
+    // submit then sends policy_id instead of re-sending policy fields. Best
+    // effort — onboarding must not fail if the backend is unreachable, and the
+    // submit path still works from the prefs it just saved.
+    await _createServerPolicy(prefs);
+
     if (!mounted) return;
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const ItemListScreen()),
       (route) => false,
     );
+  }
+
+  Future<void> _createServerPolicy(SharedPreferences prefs) async {
+    try {
+      final sumInsured = double.tryParse(_sumInsuredController.text) ?? 0;
+      final excess = double.tryParse(_excessController.text) ?? 0;
+      final body = <String, dynamic>{
+        'product': _businessNameController.text.trim(),
+        'asset_categories': _userCategory == 'Personal' ? <String>[] : <String>['Stock'],
+        'clauses_assumed': true,
+        if (_userCategory != 'Personal' && _policyNumberController.text.trim().isNotEmpty)
+          'policy_number': _policyNumberController.text.trim(),
+        if (excess > 0) 'excess': excess,
+        if (sumInsured > 0)
+          'sums_insured': [
+            {'category_key': 'sum_insured_stock', 'category_label': 'Stock', 'amount': sumInsured},
+          ],
+      };
+      final headers = {'Content-Type': 'application/json', ...await authHeaders()};
+      final resp = await http
+          .post(Uri.parse('$kApiBase/api/policies'), headers: headers, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        final policyId = (data['data'] ?? data)['policy_id'] as String?;
+        if (policyId != null && policyId.isNotEmpty) {
+          await prefs.setString('policy_id', policyId);
+        }
+      } else {
+        debugPrint('Create-policy returned ${resp.statusCode}: ${resp.body}');
+      }
+    } catch (e) {
+      debugPrint('Create-policy skipped (offline?): $e');
+    }
   }
 
   @override

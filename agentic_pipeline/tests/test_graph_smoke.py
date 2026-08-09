@@ -122,6 +122,10 @@ def scenario_state(tmp_path):
 
 def test_graph_smoke(monkeypatch, scenario_state):
     monkeypatch.setattr(g, "get_structured_llm", lambda schema, **kwargs: MockLLM(schema))
+    # Cross-claim fraud registries come from the DB now (Phase 6); inject the
+    # seeded serial registry so the dup-serial screen fires without a database.
+    monkeypatch.setattr(g, "load_fraud_registries",
+                        lambda state: ({}, {"SN-RP4471": "Claim #C-88210"}))
     # This scenario deliberately carries only an invoice — no ID, no policy
     # schedule — so the LOR gate upstream would legitimately pause it. That gate
     # has its own coverage in test_claim_type.py; here we want the assessment

@@ -10,6 +10,8 @@ import 'dart:io';
 import '../config.dart';
 import '../models/claim_model.dart';
 import '../models/lor_model.dart';
+import '../services/identity.dart';
+import '../services/draft_store.dart';
 
 /// Returns a usable filesystem path for a picked file. On Android the picker
 /// often returns a null `path` (content:// URI) while still giving us `bytes`;
@@ -39,6 +41,20 @@ class ClaimFormScreen extends StatefulWidget {
   final String? userCategory;
   final List<Map<String, dynamic>>? confirmedItems;
 
+  // Resume-from-draft: when set, the form is prefilled and "Save as Draft"
+  // updates this same draft rather than creating a new one.
+  final String? draftId;
+  final String? initialItemName;
+  final String? initialItemType;
+  final String? initialAddress;
+  final String? initialBusinessType;
+  final String? initialGstin;
+  final DateTime? initialLossDate;
+  final String? initialGovtIdName;
+  final String? initialGovtIdPath;
+  final String? initialInvoiceName;
+  final String? initialInvoicePath;
+
   const ClaimFormScreen({
     super.key,
     this.policyPdfName,
@@ -51,6 +67,17 @@ class ClaimFormScreen extends StatefulWidget {
     this.photoCapturedAt,
     this.userCategory,
     this.confirmedItems,
+    this.draftId,
+    this.initialItemName,
+    this.initialItemType,
+    this.initialAddress,
+    this.initialBusinessType,
+    this.initialGstin,
+    this.initialLossDate,
+    this.initialGovtIdName,
+    this.initialGovtIdPath,
+    this.initialInvoiceName,
+    this.initialInvoicePath,
   });
 
   @override
@@ -72,6 +99,9 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
   String? _invoiceName;
   String? _invoicePath;
   bool _isSubmitting = false;
+  // One key per form instance; reused if the user re-taps Submit after a
+  // timeout, so a submit that the server already processed is not duplicated.
+  final String _idempotencyKey = newIdempotencyKey();
 
   final Map<String, List<String>> _itemTypesByCategory = {
     'Personal': [
@@ -105,7 +135,20 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
     super.initState();
     _selectedCategory = widget.userCategory ?? 'Personal';
     final types = _itemTypesByCategory[_selectedCategory] ?? _itemTypesByCategory['Personal']!;
-    _selectedItemType = types.first;
+    _selectedItemType = (widget.initialItemType != null && types.contains(widget.initialItemType))
+        ? widget.initialItemType!
+        : types.first;
+
+    // Prefill when resuming a saved offline draft.
+    if (widget.initialItemName != null) _itemNameController.text = widget.initialItemName!;
+    if (widget.initialAddress != null) _addressController.text = widget.initialAddress!;
+    if (widget.initialBusinessType != null) _businessTypeController.text = widget.initialBusinessType!;
+    if (widget.initialGstin != null) _gstinController.text = widget.initialGstin!;
+    if (widget.initialLossDate != null) _lossDate = widget.initialLossDate!;
+    _govtIdName = widget.initialGovtIdName;
+    _govtIdPath = widget.initialGovtIdPath;
+    _invoiceName = widget.initialInvoiceName;
+    _invoicePath = widget.initialInvoicePath;
   }
 
   @override
@@ -281,9 +324,21 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
         request.fields['confirmed_items'] = jsonEncode(widget.confirmedItems);
       }
 
+      // Identity + idempotency (Phase 7/8). The gateway forwards these to the
+      // pipeline: the token scopes the claim to a user (so it shows in history),
+      // and the key dedupes a timed-out-but-processed retry.
+      request.headers.addAll(await authHeaders());
+      request.headers['Idempotency-Key'] = _idempotencyKey;
+
       // Policy details captured during onboarding. Without these the backend
       // has to assume generic terms, which makes coverage verdicts vague.
       final prefs = await SharedPreferences.getInstance();
+      // If onboarding persisted a server policy, send its id — the pipeline
+      // resolves the stored terms (incl. premises for the geofence).
+      final policyId = prefs.getString('policy_id');
+      if (policyId != null && policyId.isNotEmpty) {
+        request.fields['policy_id'] = policyId;
+      }
       final policyNumber = prefs.getString('policy_number');
       final insurer = prefs.getString('policy_insurer');
       final sumInsured = prefs.getDouble('policy_sum_insured');
@@ -300,6 +355,11 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
       if (excess != null && excess > 0) {
         request.fields['policy_excess'] = excess.toString();
       }
+
+      // PII decision (plan §11): permanentAddress / businessType / gstinNumber
+      // are collected for the local claim record but deliberately NOT transmitted
+      // — the backend has no encrypted-at-rest home for them yet. When that lands
+      // (envelope encryption per §9), add them here.
 
       // Route each file under a named field so the gateway classifies by ROLE.
       if (widget.photoPath != null && widget.photoPath!.isNotEmpty) {
@@ -354,7 +414,13 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
         SnackBar(
           content: Text('Could not submit claim: ${submitError ?? 'unknown error'}'),
           backgroundColor: Colors.redAccent,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 8),
+          // Offline / server unreachable: let them keep the work as a draft.
+          action: SnackBarAction(
+            label: 'Save as Draft',
+            textColor: Colors.white,
+            onPressed: _saveDraft,
+          ),
         ),
       );
       return;
@@ -384,8 +450,49 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
       status: ClaimStatus.pending,
     );
 
+    // Submitted successfully — if this was a resumed offline draft, clear it.
+    if (widget.draftId != null) {
+      await DraftStore.delete(widget.draftId!);
+    }
+
     if (!mounted) return;
     Navigator.pop(context, newClaim);
+  }
+
+  Future<void> _saveDraft() async {
+    await DraftStore.save(
+      existingId: widget.draftId,
+      userCategory: _selectedCategory,
+      photoPath: widget.photoPath,
+      geotag: widget.geotag,
+      timestamp: widget.timestamp,
+      photoLat: widget.photoLat,
+      photoLon: widget.photoLon,
+      photoCapturedAt: widget.photoCapturedAt,
+      policyPdfPath: widget.policyPdfPath,
+      policyPdfName: widget.policyPdfName,
+      govtIdPath: _govtIdPath,
+      govtIdName: _govtIdName,
+      invoicePath: _invoicePath,
+      invoiceName: _invoiceName,
+      itemName: _itemNameController.text.trim(),
+      itemType: _selectedItemType,
+      permanentAddress: _addressController.text.trim(),
+      businessType: _selectedCategory == 'Commercial' ? _businessTypeController.text.trim() : null,
+      gstinNumber: _selectedCategory == 'Commercial' ? _gstinController.text.trim() : null,
+      lossDate: _lossDate,
+      confirmedItemsJson: widget.confirmedItems != null ? jsonEncode(widget.confirmedItems) : null,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Saved as a draft. Finish it from the dashboard when you're back online."),
+        backgroundColor: Color(0xFF059669),
+      ),
+    );
+    // A single pop cascades up the capture flow back to the dashboard, which
+    // reloads its drafts when the flow returns.
+    Navigator.pop(context);
   }
 
   @override
@@ -756,6 +863,31 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Save offline: works with no internet — keeps the geotagged,
+                // timestamped photo (and whatever's filled in) as a draft on the
+                // dashboard to finish and submit later.
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF4F46E5)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: _isSubmitting ? null : _saveDraft,
+                    icon: const Icon(Icons.save_alt, color: Color(0xFF4F46E5)),
+                    label: Text(
+                      widget.draftId == null ? 'Save as Draft (finish later)' : 'Update Draft',
+                      style: const TextStyle(
+                        color: Color(0xFF4F46E5),
+                        fontSize: 15,
                         fontWeight: FontWeight.bold,
                       ),
                     ),

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import agentic_pipeline.graph as g
 from agentic_pipeline import requirements as reqs
 from agentic_pipeline import service
+from agentic_pipeline.config import settings
 from agentic_pipeline.schemas import (
     ClaimTypeClassification,
     ClaimTypeSection,
@@ -105,9 +106,11 @@ GATED_SCHEMAS = {"VisionOutput", "ValuationOutput", "PolicyOutput", "DraftOutput
 
 
 @pytest.fixture
-def client(monkeypatch, tmp_path):
+def client(migrated_db, test_database_url, monkeypatch, tmp_path):
+    # The service is DB-backed since Phase 4; drive it against a fresh migrated DB.
+    if settings.database_url != test_database_url:
+        pytest.skip("set DATABASE_URL == TEST_DATABASE_URL to run service tests")
     monkeypatch.setattr(reqs, "load_ruleset", lambda insurer: _ruleset())
-    service._CLAIMS_DB.clear()
 
     calls: list[str] = []
     kinds = {"D-ID": DocumentKind.GOVT_ID, "D-FIR": DocumentKind.FIR_REPORT}

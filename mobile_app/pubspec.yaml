@@ -44,6 +44,7 @@ dependencies:
   http: ^1.2.0
   http_parser: ^4.0.2   # MediaType, so multipart uploads declare a real content-type
   mime: ^1.0.5          # infer mime type from file path
+  path_provider: ^2.1.4 # persist offline-draft evidence files across app restarts
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

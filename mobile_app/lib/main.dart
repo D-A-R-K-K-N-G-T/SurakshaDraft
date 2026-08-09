@@ -599,6 +599,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   final _firmNameController = TextEditingController();
   final _firmPasswordController = TextEditingController();
+  final _manualNameController = TextEditingController();
 
   @override
   void initState() {
@@ -614,22 +615,43 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _handleFirmSignIn() async {
-    if (_firmNameController.text.trim().toUpperCase() == 'ABC' && _firmPasswordController.text == '1234') {
+    try {
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _firmNameController.text.trim(),
+        password: _firmPasswordController.text,
+      );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('is_signed_in', true);
-      await prefs.setString('policy_business_name', 'ABC Insurance Dashboard');
-      await prefs.setString('user_email', 'admin@abc.com');
-      await prefs.setString('user_name', 'ABC Firm Admin');
+      await prefs.setString('policy_business_name', 'Insurance Dashboard');
+      await prefs.setString('user_email', credential.user?.email ?? '');
+      await prefs.setString('user_name', credential.user?.displayName ?? 'Firm Admin');
       if (!mounted) return;
       navigateNextAfterAuth(context);
-    } else {
+    } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Invalid Firm Credentials. Hint: use ABC and 1234'),
+        SnackBar(
+          content: Text('Sign in failed: $e'),
           backgroundColor: Colors.redAccent,
         ),
       );
     }
+  }
+
+  Future<void> _handleManualSignIn() async {
+    if (_manualNameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your name to continue')),
+      );
+      return;
+    }
+    setState(() => _isLoading = true);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_signed_in', true);
+    await prefs.setString('user_email', 'user@example.com');
+    await prefs.setString('user_name', _manualNameController.text.trim());
+    
+    if (!mounted) return;
+    navigateNextAfterAuth(context);
   }
 
   Future<void> _handleGoogleSignIn() async {
@@ -663,19 +685,8 @@ class _AuthScreenState extends State<AuthScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Google Sign-In Notice: $e\nTap "Dev Bypass" to test offline without GCP keys.'),
+          content: Text('Google Sign-In Failed: $e'),
           duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Dev Bypass',
-            textColor: Colors.amber,
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('is_signed_in', true); // PERSIST LOGGED IN STATE
-              await prefs.setString('user_email', 'user@example.com');
-              if (!mounted) return;
-              navigateNextAfterAuth(context);
-            },
-          ),
         ),
       );
     } finally {
@@ -726,28 +737,62 @@ class _AuthScreenState extends State<AuthScreen> {
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
               const SizedBox(height: 44),
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(52),
-                        backgroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.grey),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onPressed: _handleGoogleSignIn,
-                      icon: const Icon(Icons.g_mobiledata, size: 36, color: Colors.blue),
-                      label: Text(
-                        getText('google_btn'),
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
+              if (_isLoading)
+                const CircularProgressIndicator()
+              else ...[
+                TextField(
+                  controller: _manualNameController,
+                  decoration: InputDecoration(
+                    labelText: 'Enter your Name',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.person),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4F46E5),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
+                    onPressed: _handleManualSignIn,
+                    child: const Text('Continue', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Row(
+                    children: [
+                      Expanded(child: Divider()),
+                      Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('OR', style: TextStyle(color: Colors.grey))),
+                      Expanded(child: Divider()),
+                    ],
+                  ),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    backgroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.grey),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: _handleGoogleSignIn,
+                  icon: const Icon(Icons.g_mobiledata, size: 36, color: Colors.blue),
+                  label: Text(
+                    getText('google_btn'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF0F172A),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

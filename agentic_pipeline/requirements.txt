@@ -6,3 +6,18 @@ langchain-google-genai
 langchain-ibm
 python-dotenv
 pillow
+
+# --- persistence (Phase 1: database foundation) ---
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary,pool]>=3.1
+boto3>=1.34
+cryptography>=41.0.0
+celery>=5.3
+redis>=5.0
+
+# --- tests ---
+pytest>=8
+# Ephemeral Postgres for the migration round-trip / repository tests. Optional:
+# the DB-backed tests skip cleanly when no server (and this plugin) is present.
+pytest-postgresql>=6
