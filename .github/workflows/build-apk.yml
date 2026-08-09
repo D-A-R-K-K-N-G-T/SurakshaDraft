@@ -1,0 +1,57 @@
+# Builds the release APK on GitHub's runners, which already carry the Android
+# SDK and accepted licenses — so no local Flutter/Android toolchain is needed.
+#
+# Run it from the Actions tab: "Build APK" -> "Run workflow", and supply the
+# backend's public address. API_BASE is compiled in (mobile_app/lib/config.dart
+# reads it via String.fromEnvironment), so a new server IP means a new build.
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Backend base URL, no trailing slash (nginx listens on 80, so no port suffix)"
+        required: true
+        default: "http://13.233.105.68"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # android/app/build.gradle.kts pins sourceCompatibility/jvmTarget to 17;
+      # a newer JDK makes Gradle fail on an unsupported class file version.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # pubspec.yaml requires Dart sdk ^3.11.5, so track stable rather than
+      # pinning a version that may fall below that floor.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: mobile_app
+        run: flutter pub get
+
+      # ndkVersion 28.2.13676358 is pinned in build.gradle.kts and is usually
+      # not preinstalled; this makes the download an explicit, readable step
+      # rather than a mysterious pause inside the Gradle build.
+      - name: Install pinned NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+
+      - name: Build release APK
+        working-directory: mobile_app
+        run: flutter build apk --release --dart-define=API_BASE=${{ inputs.api_base }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suraksha-apk
+          path: mobile_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
