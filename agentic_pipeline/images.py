@@ -67,6 +67,8 @@ def load_image_as_data_url(file_ref: str) -> str:
     # Guess mime from the path portion of the URI (content-addressed blobs keep
     # their original extension, so this still works for fs:// refs).
     name = Path(local_path_from_ref(file_ref)).name
+    if name.endswith('.dec'):
+        name = name[:-4]
     mime_type, _ = mimetypes.guess_type(name)
     mime_type = mime_type or "image/jpeg"
 
