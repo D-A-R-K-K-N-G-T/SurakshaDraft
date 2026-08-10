@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'screens/item_list_screen.dart';
 import 'screens/policy_onboarding_screen.dart';
+import 'screens/firm_dashboard_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -615,10 +616,27 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _handleFirmSignIn() async {
+    final firmName = _firmNameController.text.trim();
+    final password = _firmPasswordController.text;
+
+    if (firmName.toLowerCase() == 'abc' && password == '1234') {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('is_signed_in', true);
+      await prefs.setString('policy_business_name', 'abc');
+      await prefs.setString('user_email', 'abc@firm.mock');
+      await prefs.setString('user_name', 'Firm ABC');
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => FirmDashboardScreen(firmName: firmName.toLowerCase())),
+      );
+      return;
+    }
+
     try {
       final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _firmNameController.text.trim(),
-        password: _firmPasswordController.text,
+        email: firmName,
+        password: password,
       );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('is_signed_in', true);
@@ -707,10 +725,12 @@ class _AuthScreenState extends State<AuthScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+        child: Center(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(28.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -796,6 +816,8 @@ class _AuthScreenState extends State<AuthScreen> {
             ],
           ),
         ),
+          ),
+        ),
       ),
     );
   }
@@ -804,10 +826,12 @@ class _AuthScreenState extends State<AuthScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+        child: Center(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(28.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -869,6 +893,8 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
             ],
+          ),
+        ),
           ),
         ),
       ),

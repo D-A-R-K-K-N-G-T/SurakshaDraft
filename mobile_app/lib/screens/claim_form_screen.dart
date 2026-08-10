@@ -859,7 +859,7 @@ class _ClaimFormScreenState extends State<ClaimFormScreen> {
                           )
                         : const Icon(Icons.send_rounded, color: Colors.white),
                     label: Text(
-                      _isSubmitting ? 'Submitting Claim...' : 'Submit Claim',
+                      _isSubmitting ? 'AI - Analyzing' : 'Submit Claim',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 16,

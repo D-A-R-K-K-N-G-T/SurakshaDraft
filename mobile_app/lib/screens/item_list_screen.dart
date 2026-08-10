@@ -309,7 +309,7 @@ class _ItemListScreenState extends State<ItemListScreen> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text('Claim "${newClaim.itemName}" submitted! Status: Pending (LangChain AI Processing...)'),
+                child: Text('Claim "${newClaim.itemName}" submitted! Status: Pending (AI Analyzing...)'),
               ),
             ],
           ),
@@ -822,7 +822,7 @@ There are currently no rejected items.''',
               ),
               const SizedBox(width: 12),
               const Expanded(
-                child: Text('LangChain AI Processing', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                child: Text('AI Analyzing', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ],
           ),

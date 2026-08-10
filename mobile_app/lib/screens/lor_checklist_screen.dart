@@ -39,6 +39,34 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
   late LorPack _pack;
   String? _uploadingRequirementId;
   bool _changingClaimType = false;
+  bool _uploadedSomething = false;
+  bool _polling = false;
+
+  Future<void> _pollLor() async {
+    if (_polling) return;
+    _polling = true;
+    int attempts = 0;
+    while (attempts < 40 && mounted && _polling) {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!mounted) break;
+      try {
+        final response = await http.get(Uri.parse('$kApiBase/api/claim/${widget.claimId}/lor'));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data != null && data.isNotEmpty) {
+            final newPack = LorPack.tryFrom(data);
+            if (newPack != null && mounted) {
+              setState(() => _pack = newPack);
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Polling error: $e');
+      }
+      attempts++;
+    }
+    _polling = false;
+  }
 
   @override
   void initState() {
@@ -94,11 +122,12 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
 
       if (response.statusCode == 200) {
         if (!mounted) return;
+        _uploadedSomething = true;
         _toast(
           'Uploaded. We are checking it now — this list will update shortly.',
           const Color(0xFF1E1B4B),
         );
-        Navigator.pop(context, true); // let the caller resume polling
+        _pollLor();
       } else {
         _toast(_errorFrom(body, response.statusCode), Colors.redAccent);
       }
@@ -260,8 +289,14 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
     final outstandingAdvisory =
         _pack.missing.where((r) => !r.isBlocking).toList();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, dynamic result) {
+        if (didPop) return;
+        Navigator.pop(context, _uploadedSomething);
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         title: const Text('Documents needed'),
         backgroundColor: Colors.white,
@@ -314,7 +349,7 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _header() {
