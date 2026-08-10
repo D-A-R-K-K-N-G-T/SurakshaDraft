@@ -39,38 +39,18 @@ def _cache_put(ref: str, data: bytes) -> None:
         _cache.popitem(last=False)
 
 
-def _fetch_s3(ref: str) -> bytes:
-    # s3://bucket/key -> GetObject. boto3 is imported lazily so dev/tests never
-    # need it installed.
-    try:
-        from agentic_pipeline.blobs import get_s3_client  # noqa: WPS433 (lazy: pulls boto3)
-    except ImportError as exc:  # pragma: no cover - prod-only path
-        raise NotImplementedError(
-            "s3:// file_ref requires boto3; install it or use fs:// in dev."
-        ) from exc
-    without_scheme = ref[len("s3://"):]
-    bucket, _, key = without_scheme.partition("/")
-    if not bucket or not key:
-        raise ValueError(f"Malformed s3 URI: {ref!r}")
-    # Same client builder as blobs.py so a MinIO endpoint configured for the
-    # blob store is honoured here too, instead of silently hitting real S3.
-    obj = get_s3_client().get_object(Bucket=bucket, Key=key)
-    return obj["Body"].read()
-
-
 def resolve_file_ref(ref: str) -> bytes:
     cached = _cache_get(ref)
     if cached is not None:
         return cached
 
-    if ref.startswith("s3://"):
-        data = _fetch_s3(ref)
-    elif ref.startswith("https://") or ref.startswith("http://"):
+    if ref.startswith("https://") or ref.startswith("http://"):
         # TODO: Implement HTTPS fetch (presigned URLs). Not needed in dev.
         raise NotImplementedError("HTTPS fetch not implemented")
-    else:
-        # fs://, file://, or a bare local path.
-        data = Path(local_path_from_ref(ref)).read_bytes()
+    
+    # fs://, file://, s3:// or a bare local path.
+    # local_path_from_ref handles all of these and correctly decrypts .enc files.
+    data = Path(local_path_from_ref(ref)).read_bytes()
 
     _cache_put(ref, data)
     return data
