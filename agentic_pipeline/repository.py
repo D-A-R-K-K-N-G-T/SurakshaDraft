@@ -20,7 +20,7 @@ import json
 import uuid
 from typing import Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 
 from agentic_pipeline import models as M
 from agentic_pipeline.schemas import LORPack
@@ -640,6 +640,36 @@ def list_claims(session, *, user_id, limit: int = 20, cursor: Optional[str] = No
         "claim_type": r.claim_type_key,
         "event_description": r.event_description,
         "awaiting_documents": r.awaiting_documents,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]
+    next_cursor = rows[-1].created_at.isoformat() if (has_more and rows) else None
+    return items, next_cursor
+
+
+def list_firm_claims(session, *, firm_name: str, limit: int = 20, cursor: Optional[str] = None):
+    """A firm's claims, newest first, created_at-cursor paginated.
+    Returns (items, next_cursor)."""
+    q = (
+        select(M.Claim)
+        .where(
+            func.lower(M.Claim.policy_snapshot.op("->>")("policy_insurer")) == firm_name.lower()
+        )
+        .order_by(M.Claim.created_at.desc(), M.Claim.id.desc())
+    )
+    if cursor:
+        c = _parse_dt(cursor)
+        if c is not None:
+            q = q.where(M.Claim.created_at < c)
+    rows = session.execute(q.limit(limit + 1)).scalars().all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = [{
+        "claim_ref": r.claim_ref,
+        "status": r.status,
+        "claim_type": r.claim_type_key,
+        "event_description": r.event_description,
+        "awaiting_documents": r.awaiting_documents,
+        "latest_state": r.latest_state,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     } for r in rows]
     next_cursor = rows[-1].created_at.isoformat() if (has_more and rows) else None

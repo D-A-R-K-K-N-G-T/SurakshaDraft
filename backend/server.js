@@ -517,6 +517,20 @@ app.get('/api/claims', async (req, res) => {
   }
 });
 
+// The firm's claim history — allows the firm dashboard to fetch all its claims.
+app.get('/api/firm/:firm_name/claims', async (req, res) => {
+  try {
+    const response = await axios.get(`${PYTHON_BACKEND_URL}/api/v1/firm/${req.params.firm_name}/claims`, {
+      params: req.query,
+      headers: forwardHeaders(req),
+    });
+    res.json(response.data);
+  } catch (error) {
+    const status = error.response ? error.response.status : 500;
+    res.status(status).json({ error: 'Failed to fetch firm claims.' });
+  }
+});
+
 // Latest LOR pack only — lighter than polling the whole claim state.
 app.get('/api/claim/:claim_id/lor', async (req, res) => {
   try {

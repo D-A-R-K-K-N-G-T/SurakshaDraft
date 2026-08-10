@@ -215,6 +215,19 @@ def list_claims(
         return {"claims": items, "next_cursor": next_cursor}
 
 
+@app.get("/api/v1/firm/{firm_name}/claims")
+def list_firm_claims(
+    firm_name: str,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+):
+    """The firm's claim history, created_at-cursor paginated."""
+    limit = max(1, min(limit, 100))
+    with session_scope() as s:
+        items, next_cursor = repo.list_firm_claims(s, firm_name=firm_name, limit=limit, cursor=cursor)
+        return {"claims": items, "next_cursor": next_cursor}
+
+
 @app.get("/api/v1/claim/{claim_id}/lor")
 def get_claim_lor(claim_id: str):
     """Latest LOR pack only, so polling need not ship the entire claim state."""

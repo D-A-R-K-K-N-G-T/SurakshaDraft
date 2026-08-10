@@ -9,12 +9,49 @@
       "client_info": {
         "mobilesdk_app_id": "1:804457732869:android:44060083716de76194b56c",
         "android_client_info": {
-          "package_name": "com.surakshadraft.app"
+          "package_name": "com.example.learningdart"
         }
       },
       "oauth_client": [
         {
           "client_id": "804457732869-j6osrqheuhp1hftf6bhq95r1cssqtior.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.learningdart",
+            "certificate_hash": "dfd38686e0e25711bc7a510067e1442d4cc131fa"
+          }
+        },
+        {
+          "client_id": "804457732869-j0csnv8k9f5tualkv4p6nicb59gaj1pk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-kgEcjL5kucDE35i2tR4xUlr_zgDY57s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "804457732869-j0csnv8k9f5tualkv4p6nicb59gaj1pk.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:804457732869:android:2a86d5867162389c94b56c",
+        "android_client_info": {
+          "package_name": "com.surakshadraft.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "804457732869-rttjh0l3f2154ul9a77d6bmgsqvoal8g.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.surakshadraft.app",
