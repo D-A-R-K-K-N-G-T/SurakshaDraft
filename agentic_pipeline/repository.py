@@ -652,7 +652,7 @@ def list_firm_claims(session, *, firm_name: str, limit: int = 20, cursor: Option
     q = (
         select(M.Claim)
         .where(
-            func.lower(M.Claim.policy_snapshot.op("->>")("policy_insurer")) == firm_name.lower()
+            func.lower(M.Claim.policy_snapshot.op("->>")("insurer")) == firm_name.lower()
         )
         .order_by(M.Claim.created_at.desc(), M.Claim.id.desc())
     )
