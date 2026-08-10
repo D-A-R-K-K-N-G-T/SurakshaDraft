@@ -360,6 +360,27 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
                 const Color(0xFF16A34A),
                 _pack.satisfied,
               ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context, _uploadedSomething);
+                },
+                icon: const Icon(Icons.check_circle, color: Colors.white),
+                label: const Text(
+                  'Submit for Review',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF16A34A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(height: 24),
           ],
         ),
@@ -397,32 +418,30 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
                     'kind of claim.',
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
           ),
-          if (_pack.claimTypeLabel != null) ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.label_outline, size: 18, color: Color(0xFF64748B)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    'Treated as: ${_pack.claimTypeLabel}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.label_outline, size: 18, color: Color(0xFF64748B)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Treated as: ${_pack.claimTypeLabel ?? "Unknown"}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: _changingClaimType ? null : _changeClaimType,
-                style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                child: Text(_changingClaimType
-                    ? 'Loading…'
-                    : "Not the right kind of claim?"),
               ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _changingClaimType ? null : _changeClaimType,
+              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+              child: Text(_changingClaimType
+                  ? 'Loading…'
+                  : "Not the right kind of claim?"),
             ),
-          ],
+          ),
         ],
       ),
     );
