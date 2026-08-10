@@ -9,6 +9,7 @@ import 'package:mime/mime.dart';
 
 import '../config.dart';
 import '../models/lor_model.dart';
+import '../services/identity.dart';
 
 /// The claimant's document checklist — what the insurer needs for this claim,
 /// what has arrived, and what is still outstanding.
@@ -39,6 +40,9 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
   late LorPack _pack;
   String? _uploadingRequirementId;
   bool _changingClaimType = false;
+  
+  // Tracks picked files by requirement ID before they are submitted.
+  final Map<String, String> _pickedFiles = {};
   bool _uploadedSomething = false;
   bool _polling = false;
 
@@ -92,11 +96,10 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
     return tmp.path;
   }
 
-  Future<void> _uploadFor(RequirementResult req) async {
+  Future<void> _pickFor(RequirementResult req) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png'],
-      withData: true,
     );
     if (result == null || result.files.isEmpty) return;
 
@@ -105,6 +108,15 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
       _toast('Could not read that file. Try picking it again.', Colors.amber);
       return;
     }
+    
+    setState(() {
+      _pickedFiles[req.requirementId] = path;
+    });
+  }
+
+  Future<void> _uploadFor(RequirementResult req) async {
+    final path = _pickedFiles[req.requirementId];
+    if (path == null) return;
 
     setState(() => _uploadingRequirementId = req.requirementId);
     try {
@@ -112,9 +124,9 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
         'POST',
         Uri.parse('$kApiBase/api/claim/${widget.claimId}/documents'),
       );
-      // Tags the upload with the checklist row it answers. This is the only
-      // thing that can satisfy an "attested" requirement.
+      // Tags the upload with the checklist row it answers.
       request.fields['requirement_id'] = req.requirementId;
+      request.headers.addAll(await authHeaders());
       request.files.add(await _multipart(_fieldFor(req), path));
 
       final response = await request.send().timeout(const Duration(seconds: 120));
@@ -123,8 +135,11 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
       if (response.statusCode == 200) {
         if (!mounted) return;
         _uploadedSomething = true;
+        setState(() {
+          _pickedFiles.remove(req.requirementId);
+        });
         _toast(
-          'Uploaded. We are checking it now — this list will update shortly.',
+          'Submitted successfully. We are checking it now — this list will update shortly.',
           const Color(0xFF1E1B4B),
         );
         _pollLor();
@@ -539,23 +554,60 @@ class _LorChecklistScreenState extends State<LorChecklistScreen> {
             ),
           if (!isDone) ...[
             const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: busy ? null : () => _uploadFor(req),
-                icon: busy
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.upload_file, size: 18),
-                label: Text(busy
-                    ? 'Uploading…'
-                    : req.status == RequirementStatus.unverified
-                        ? 'Upload a clearer copy'
-                        : 'Upload'),
+            if (_pickedFiles.containsKey(req.requirementId)) ...[
+              Row(
+                children: [
+                  const Icon(Icons.insert_drive_file, size: 16, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      _pickedFiles[req.requirementId]!.split('/').last,
+                      style: const TextStyle(fontSize: 12, color: Colors.black87),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 16, color: Colors.grey),
+                    onPressed: busy ? null : () {
+                      setState(() {
+                        _pickedFiles.remove(req.requirementId);
+                      });
+                    },
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
               ),
-            ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: busy ? null : () => _uploadFor(req),
+                  icon: busy
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.send, size: 16, color: Colors.white),
+                  label: Text(busy ? 'Submitting...' : 'Submit Document', style: const TextStyle(color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E1B4B),
+                  ),
+                ),
+              ),
+            ] else ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickFor(req),
+                  icon: const Icon(Icons.upload_file, size: 18),
+                  label: Text(req.status == RequirementStatus.unverified
+                      ? 'Upload a clearer copy'
+                      : 'Upload'),
+                ),
+              ),
+            ],
           ],
         ],
       ),
