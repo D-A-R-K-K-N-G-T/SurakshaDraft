@@ -9,7 +9,7 @@
 #     sudo bash scripts/ubuntu_bootstrap.sh
 #
 # Idempotent: safe to re-run. It does NOT deploy the app — it only makes the
-# machine capable of running it. See DEPLOY.md for the deploy step.
+# machine capable of running it. Deploy with docker-compose.prod.yml afterwards.
 set -euo pipefail
 
 log() { echo "[bootstrap] $*"; }
@@ -107,7 +107,7 @@ log "done."
 log "IMPORTANT: on a non-AWS host there is no instance role, so S3_ACCESS_KEY /"
 log "S3_SECRET_KEY in .env.prod must be filled in with an S3-scoped IAM user's"
 log "keys (never an AdministratorAccess key) — or point S3_ENDPOINT_URL at a"
-log "self-hosted MinIO instead. See DEPLOY.md."
+log "self-hosted MinIO instead. Configure it via .env.prod (see .env.prod.example)."
 if [ -n "$TARGET_USER" ]; then
   log "Log out and back in as ${TARGET_USER} so the docker group applies."
 fi

@@ -1,6 +1,6 @@
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime
 from agentic_pipeline.worker import celery_app
 from agentic_pipeline.db import session_scope
 from agentic_pipeline import repository as repo

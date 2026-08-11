@@ -33,7 +33,7 @@ from agentic_pipeline.prompts import (
 from agentic_pipeline.schemas import (
     LineItem, VisionOutput, ValueSource, PolicyStatus,
     PendingVerificationItem, RejectedItem, ValuationOutput,
-    PolicyOutput, ReconciliationOutput, PlausibilityOutput,
+    PolicyOutput, ReconciliationOutput,
     DraftOutput, QCGuardOutput, DocumentRecord, DocumentExtractionOutput,
     PolicyExtractionOutput, DocumentTriageOutput, DocumentKind, TriageVerdict,
     ClaimTypeClassification

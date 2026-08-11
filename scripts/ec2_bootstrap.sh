@@ -4,7 +4,7 @@
 # t3.micro). Paste into the "User data" box at launch, or run manually as ec2-user.
 #
 # Idempotent: safe to re-run. It does NOT deploy the app — it only makes the
-# machine capable of running it. See DEPLOY.md for the deploy step.
+# machine capable of running it. Deploy with docker-compose.prod.yml afterwards.
 set -euo pipefail
 
 log() { echo "[bootstrap] $*"; }
@@ -76,4 +76,4 @@ JSON
   systemctl restart docker
 fi
 
-log "done. Log out and back in so the docker group applies, then see DEPLOY.md."
+log "done. Log out and back in so the docker group applies, then deploy with docker-compose.prod.yml."

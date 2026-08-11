@@ -1,5 +1,5 @@
 # Build context hygiene. Without this the context is ~50 MB of node_modules and
-# sample JPEGs, which on a t3.micro is a real chunk of the build time.
+# runtime uploads, which on a t3.micro is a real chunk of the build time.
 .git
 .github
 .pytest_cache
@@ -15,15 +15,13 @@ backend/uploads
 .env
 .env.prod
 
-# Local artefacts and fixtures.
+# Local artefacts.
 out/
 agentic_pipeline/out/
 *.jpg
 *.jpeg
 *.png
 *.pdf
-scenario_*.json
-test_run.py
 
 # The Flutter client is not deployed to the server.
 mobile_app

@@ -298,11 +298,6 @@ class ReconciliationOutput(BaseModel):
     pending_items: list[LLMPendingItem]
 
 
-class PlausibilityOutput(BaseModel):
-    line_items: list[LineItem]
-    rejected_items: list[RejectedItem]
-
-
 class DraftOutput(BaseModel):
     main_schedule: str
     rejected_items_annexure: str

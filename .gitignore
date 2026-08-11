@@ -6,6 +6,9 @@ secrets/
 
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+node_modules/
 backend/uploads/
 out/
 agentic_pipeline/out/

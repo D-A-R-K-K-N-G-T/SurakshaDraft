@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 load_dotenv(".env")
 
 import logging
-import traceback
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel, Field

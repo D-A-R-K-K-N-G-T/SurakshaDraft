@@ -181,8 +181,6 @@ def cmd_list(args) -> int:
 
 
 def cmd_diff(args) -> int:
-    from agentic_pipeline import requirements as reqs
-
     def _load(version):
         # Reuse the reconstruction path by temporarily looking up the row.
         with session_scope() as s:

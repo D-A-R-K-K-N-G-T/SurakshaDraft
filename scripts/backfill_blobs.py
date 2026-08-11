@@ -15,7 +15,6 @@ import argparse
 import mimetypes
 import os
 import re
-import sys
 from pathlib import Path
 
 from agentic_pipeline.blobs import blob_abspath, fs_uri, normalize_ext, sha256_file
