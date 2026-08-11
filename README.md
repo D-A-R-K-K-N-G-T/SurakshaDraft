@@ -6,15 +6,15 @@
 
 ## The problem
 
-When a shop floods or a warehouse burns, the owner has to file an insurance claim. Today that means:
+When natural disasters like floods hit certain parts of India, it results in a lot of damages to MSMEs (Micro Small & Medium Enterprises).
+In order to get compensation, the owners file claim forms to their respective insurance companies. However, due to various reasons such as
+inadequate timelines they lose out an actually getting the insurance for their lost product. 
 
-* Writing out every damaged item by hand, with values they have to guess.
-* Finding out, weeks later, that the insurer needed three documents nobody told them about.
-* Waiting for a surveyor to visit, inspect and write a report.
+This is where SurakshaDraft comes in. Our product acts as a catalyst in this entire pipeline. By speeding up the entire process, it gives claimants a far better chance at actually getting compensation by the end of it. 
 
-Claims take weeks to even reach the insurer's desk. Most delays are not fraud or disputes. They are simply paperwork that arrived incomplete, and nobody noticed until a human read it.
-
-Insurers feel the same pain from the other side. They receive claim files that are missing evidence, list items the policy never covered, and price things at replacement cost when the policy pays depreciated value. Every one of those goes back to the claimant, and the clock restarts.
+This however, is just one part of the picture. We also significantly reduce the workload of the insurance company by providing them with a 
+final list of approved and rejected claims along with their respective reasons. We DO NOT make the final decision for the insurer but we 
+certainly help them make a far more informed decision and provide them with all the information they need.
 
 ## What we built
 
