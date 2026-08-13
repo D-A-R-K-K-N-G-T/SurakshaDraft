@@ -2,6 +2,8 @@
 
 **An AI claims assistant that turns photos of damaged property into a complete, checked insurance claim pack.**
 
+Demo Video: https://drive.google.com/file/d/1rZ7cNEwrgqi7O1bGFTxXbE1X6ZTdPEde/view?usp=sharing
+
 ---
 
 ## The problem
